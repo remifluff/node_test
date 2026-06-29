@@ -14,7 +14,7 @@ use patch_graph::{
 };
 use patch_graph::parse::{commit_node_label, estimate_node_size, estimate_text_box_size, object_from_label, parse_delay_hex, random_unused_delay_hex, parse_pd_object_text};
 use patch_graph::{cycle_vertical_bounds, find_cycle_nodes, find_path_nodes};
-use keyboard_ui::KeyboardUi;
+use keyboard_ui::{KeyboardAction, KeyboardUi};
 use mouse_ui::canvas::{scene_layer_id, scene_transform, show_patch_scene, CanvasView};
 use mouse_ui::object_ui::{self, NodeAreaBody};
 
@@ -1609,7 +1609,7 @@ impl eframe::App for PdPatchEditor {
             })
             .show_inside(ui, |ui| {
                 if self.split_screen {
-                    let preview = layout_preview_cached(
+                    let mut preview = layout_preview_cached(
                         &self.graph,
                         &mut self.layout_preview_cache,
                     )
@@ -1627,16 +1627,38 @@ impl eframe::App for PdPatchEditor {
                         .show_inside(ui, |ui| {
                             ui.horizontal(|ui| {
                                 ui.label(RichText::new("Sorted layout").strong());
-                                ui.label(
-                                    RichText::new("↑↓ along wires · ←→ same row")
-                                        .small()
-                                        .color(PAPER_DIM),
-                                );
+                                    ui.label(
+                                        RichText::new("↑↓ wires · ←→ row · Shift+←→ reorder · Enter splice")
+                                            .small()
+                                            .color(PAPER_DIM),
+                                    );
                             });
                             ui.separator();
                             let default_scene = self.default_scene_view_rect();
                             let editing = self.editing_node;
-                            self.keyboard.show(ui, &self.graph, &preview, editing, default_scene);
+                            self.keyboard.show(ui, &self.graph, &mut preview, editing, default_scene);
+
+                            if let KeyboardAction::SpliceNewNode { focus } = self.keyboard.action {
+                                self.record_undo();
+                                self.clear_all_selection();
+                                if let Some(edge_id) = self.graph.edge_indices().find(|&eid| {
+                                    self.graph.edge_endpoints(eid)
+                                        .is_some_and(|(from, _to)| from == focus)
+                                }) {
+                                    let focus_pos = self.graph[focus].pos;
+                                    let new_pos = pos2(focus_pos.x, focus_pos.y + 75.0);
+                                    let new_id = self.add_object(
+                                        PdObject::Message { text: String::new() },
+                                        new_pos,
+                                    );
+                                    self.graph[new_id].selected = true;
+                                    self.insert_node_on_edge(new_id, edge_id);
+                                    self.start_editing(new_id);
+                                    self.keyboard.focus = Some(new_id);
+                                    self.keyboard.auto_focus = true;
+                                }
+                                self.keyboard.action = KeyboardAction::None;
+                            }
                         });
 
                     egui::CentralPanel::default()

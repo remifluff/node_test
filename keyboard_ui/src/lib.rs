@@ -2,7 +2,7 @@
 
 pub mod draw;
 
-use eframe::egui::{Key, Rect, Ui};
+use eframe::egui::{Key, Modifiers, Rect, Ui};
 use patch_graph::{LayoutPreview, NodeId, PatchGraph};
 use petgraph::Direction;
 
@@ -10,11 +10,20 @@ use mouse_ui::canvas::{show_patch_scene, CanvasView};
 
 use crate::draw::paint_scene;
 
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum KeyboardAction {
+    #[default]
+    None,
+    /// Create a new node and splice it into the first outgoing edge from `focus`.
+    SpliceNewNode { focus: NodeId },
+}
+
 #[derive(Default)]
 pub struct KeyboardUi {
     pub view: CanvasView,
     pub focus: Option<NodeId>,
     pub auto_focus: bool,
+    pub action: KeyboardAction,
 }
 
 impl KeyboardUi {
@@ -22,7 +31,7 @@ impl KeyboardUi {
         &mut self,
         ui: &mut Ui,
         graph: &PatchGraph,
-        preview: &LayoutPreview,
+        preview: &mut LayoutPreview,
         editing_node: Option<NodeId>,
         default_scene: Rect,
     ) {
@@ -131,11 +140,37 @@ impl KeyboardUi {
         Some(candidates[0])
     }
 
+    fn swap_row_positions(a: NodeId, b: NodeId, preview: &mut LayoutPreview) {
+        let a_pos = preview.positions.get(&a.index()).copied();
+        let b_pos = preview.positions.get(&b.index()).copied();
+        if let (Some(ap), Some(bp)) = (a_pos, b_pos) {
+            preview.positions.insert(a.index(), bp);
+            preview.positions.insert(b.index(), ap);
+        }
+
+        let Some(a_cell) = preview.nav.get(&a.index()).copied() else { return };
+        let Some(b_cell) = preview.nav.get(&b.index()).copied() else { return };
+        if a_cell.row != b_cell.row {
+            return;
+        }
+        let row = &mut preview.rows[a_cell.row as usize];
+        let a_idx = row.iter().position(|&id| id == a.index());
+        let b_idx = row.iter().position(|&id| id == b.index());
+        if let (Some(ai), Some(bi)) = (a_idx, b_idx) {
+            row.swap(ai, bi);
+        }
+        for (slot, &id) in row.iter().enumerate() {
+            if let Some(cell) = preview.nav.get_mut(&id) {
+                cell.slot = slot as u32;
+            }
+        }
+    }
+
     fn handle_input(
         &mut self,
         ui: &mut Ui,
         graph: &PatchGraph,
-        preview: &LayoutPreview,
+        preview: &mut LayoutPreview,
         pane_active: bool,
     ) {
         if !pane_active {
@@ -147,6 +182,7 @@ impl KeyboardUi {
             return;
         };
 
+        let shift = ui.input(|i| i.modifiers.shift);
         let (left, right, up, down) = ui.input(|i| {
             (
                 i.key_pressed(Key::ArrowLeft),
@@ -156,34 +192,75 @@ impl KeyboardUi {
             )
         });
 
-        let next = if left {
-            Self::nav_horizontal(focus, preview, -1)
-        } else if right {
-            Self::nav_horizontal(focus, preview, 1)
-        } else if up {
-            Self::nav_vertical(graph, focus, preview, false)
-        } else if down {
-            Self::nav_vertical(graph, focus, preview, true)
+        let consumed = if shift && left {
+            if let Some(adjacent) = Self::nav_horizontal(focus, preview, -1) {
+                Self::swap_row_positions(focus, adjacent, preview);
+                self.focus = Some(focus);
+                ui.input_mut(|i| i.consume_key(Modifiers { shift: true, ..Default::default() }, Key::ArrowLeft));
+                true
+            } else {
+                false
+            }
+        } else if shift && right {
+            if let Some(adjacent) = Self::nav_horizontal(focus, preview, 1) {
+                Self::swap_row_positions(focus, adjacent, preview);
+                self.focus = Some(focus);
+                ui.input_mut(|i| i.consume_key(Modifiers { shift: true, ..Default::default() }, Key::ArrowRight));
+                true
+            } else {
+                false
+            }
         } else {
-            None
+            false
         };
 
-        if let Some(id) = next {
-            self.focus = Some(id);
-            ui.input_mut(|i| {
-                if left {
-                    i.consume_key(Default::default(), Key::ArrowLeft);
+        if !consumed {
+            let next = if left {
+                Self::nav_horizontal(focus, preview, -1)
+            } else if right {
+                Self::nav_horizontal(focus, preview, 1)
+            } else if up {
+                Self::nav_vertical(graph, focus, preview, false)
+            } else if down {
+                Self::nav_vertical(graph, focus, preview, true)
+            } else {
+                None
+            };
+
+            if let Some(id) = next {
+                self.focus = Some(id);
+                ui.input_mut(|i| {
+                    if left {
+                        i.consume_key(Default::default(), Key::ArrowLeft);
+                    }
+                    if right {
+                        i.consume_key(Default::default(), Key::ArrowRight);
+                    }
+                    if up {
+                        i.consume_key(Default::default(), Key::ArrowUp);
+                    }
+                    if down {
+                        i.consume_key(Default::default(), Key::ArrowDown);
+                    }
+                });
+            }
+        }
+
+        if self.action == KeyboardAction::None {
+            let enter = ui.input(|i| i.key_pressed(Key::Enter));
+            if enter {
+                let node = &graph[focus];
+                if node.object.inlets() > 0 && node.object.outlets() > 0 {
+                    let has_downstream = graph
+                        .neighbors_directed(focus, Direction::Outgoing)
+                        .next()
+                        .is_some();
+                    if has_downstream {
+                        self.action = KeyboardAction::SpliceNewNode { focus };
+                        ui.input_mut(|i| i.consume_key(Default::default(), Key::Enter));
+                    }
                 }
-                if right {
-                    i.consume_key(Default::default(), Key::ArrowRight);
-                }
-                if up {
-                    i.consume_key(Default::default(), Key::ArrowUp);
-                }
-                if down {
-                    i.consume_key(Default::default(), Key::ArrowDown);
-                }
-            });
+            }
         }
     }
 }
