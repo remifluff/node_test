@@ -1,0 +1,26 @@
+[workspace]
+members = [".", "patch_layout"]
+resolver = "2"
+
+[package]
+name = "node_test"
+version = "0.1.0"
+edition = "2021"
+license = "MIT OR Apache-2.0"
+description = "Pd-style patch editor with automatic graph layout"
+readme = "README.md"
+repository = "https://github.com/remifluff/node_test"
+
+[[bin]]
+name = "pd_editor"
+path = "src/main.rs"
+
+[dependencies]
+egui = "0.34.1"
+eframe = "0.34.1"
+log = "0.4.27"
+petgraph = "0.8"
+patch_layout = { path = "patch_layout" }
+
+[target.'cfg(not(target_arch = "wasm32"))'.dependencies]
+env_logger = "0.11.8"
