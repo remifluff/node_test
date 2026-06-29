@@ -1,4 +1,4 @@
-use crate::graph::Point;
+use crate::layout::layout_graph::Point;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum FlowDirection {

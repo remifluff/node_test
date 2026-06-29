@@ -62,8 +62,10 @@ pub fn show_operator_autocomplete(
 
     if down {
         selected = (selected + 1) % matches.len();
+        ui.input_mut(|i| i.consume_key(Default::default(), Key::ArrowDown));
     } else if up {
         selected = selected.checked_sub(1).unwrap_or(matches.len() - 1);
+        ui.input_mut(|i| i.consume_key(Default::default(), Key::ArrowUp));
     }
 
     if tab {

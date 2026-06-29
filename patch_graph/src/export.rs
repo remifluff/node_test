@@ -1,7 +1,8 @@
 //! Export editor graph as fragment_interlay `(patch …)` s-expression notation.
 
-use crate::graph::{EdgeData, Node, NodeId, PatchGraph, PdObject};
-use petgraph::visit::EdgeRef;
+use crate::graph::{NodeId, PatchGraph};
+use crate::node::{EdgeData, Node};
+use crate::object::PdObject;
 use std::collections::HashMap;
 
 const GRID: f64 = 15.0;
@@ -240,8 +241,8 @@ pub fn export_patch(graph: &PatchGraph, name: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::graph::PdObject;
-    use eframe::egui::pos2;
+    use crate::object::PdObject;
+    use emath::{pos2, vec2, Rect, Pos2};
 
     #[test]
     fn format_coord_matches_interlay_rules() {
@@ -257,25 +258,25 @@ mod tests {
             object: PdObject::In,
             label: "[in]".to_owned(),
             pos: pos2(100.0, 40.0),
-            size: eframe::egui::vec2(30.0, 22.0),
+            size: vec2(30.0, 22.0),
             box_id: Some("obj-1".into()),
-            screen_rect: eframe::egui::Rect::NOTHING,
+            screen_rect: Rect::NOTHING,
             inlet_t: vec![],
             outlet_t: vec![0.5],
             inlet_positions: vec![],
-            outlet_positions: vec![eframe::egui::Pos2::ZERO],
+            outlet_positions: vec![Pos2::ZERO],
             selected: false,
         });
         let out_id = graph.add_node(Node {
             object: PdObject::Out,
             label: "[out]".to_owned(),
             pos: pos2(100.0, 110.0),
-            size: eframe::egui::vec2(30.0, 22.0),
+            size: vec2(30.0, 22.0),
             box_id: Some("obj-2".into()),
-            screen_rect: eframe::egui::Rect::NOTHING,
+            screen_rect: Rect::NOTHING,
             inlet_t: vec![0.5],
             outlet_t: vec![],
-            inlet_positions: vec![eframe::egui::Pos2::ZERO],
+            inlet_positions: vec![Pos2::ZERO],
             outlet_positions: vec![],
             selected: false,
         });

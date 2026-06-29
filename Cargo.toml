@@ -1,5 +1,5 @@
 [workspace]
-members = [".", "patch_layout"]
+members = [".", "patch_graph", "mouse_ui", "keyboard_ui"]
 resolver = "2"
 
 [package]
@@ -16,11 +16,13 @@ name = "pd_editor"
 path = "src/main.rs"
 
 [dependencies]
+patch_graph = { path = "patch_graph" }
+mouse_ui = { path = "mouse_ui" }
+keyboard_ui = { path = "keyboard_ui" }
 egui = "0.34.1"
 eframe = "0.34.1"
 log = "0.4.27"
 petgraph = "0.8"
-patch_layout = { path = "patch_layout" }
 
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
 env_logger = "0.11.8"

@@ -7,20 +7,26 @@ use eframe::egui::{epaint::CubicBezierShape, epaint::Shape, pos2 as egui_pos2};
 use eframe::egui::Stroke;
 use petgraph::graph::{EdgeIndex, NodeIndex};
 use petgraph::stable_graph::StableGraph;
-use petgraph::visit::EdgeRef;
+use petgraph::visit::{EdgeRef, IntoNeighborsDirected};
+use patch_graph::{
+    export_patch, layout_preview_cached, LayoutConfig, LayoutPreview, EdgeData, EdgeId,
+    Node, NodeId, PatchGraph, PdObject,
+};
+use patch_graph::parse::{commit_node_label, estimate_node_size, estimate_text_box_size, object_from_label, parse_delay_hex, random_unused_delay_hex, parse_pd_object_text};
+use patch_graph::{cycle_vertical_bounds, find_cycle_nodes, find_path_nodes};
+use keyboard_ui::KeyboardUi;
+use mouse_ui::canvas::{scene_layer_id, scene_transform, show_patch_scene, CanvasView};
+use mouse_ui::object_ui::{self, NodeAreaBody};
+
 use std::collections::{HashMap, HashSet, VecDeque};
 
-use crate::style::{
+use mouse_ui::style::{
     self, default_port_ts, layout_job, label_font, paint_node_hover_highlight, paint_port_square,
     min_box_width, port_position_t, strip_brackets, PortHighlight, BOX_H, CABLE_STROKE, GRID_STEP,
     INK, LABEL_INSET_X, LINE_W, PAPER, PAPER_DIM, port_size, WIRE_HANDLE, WIRE_HANDLE_HOVER,
 };
-use crate::node_autocomplete::{show_operator_autocomplete, show_sized_text_edit};
-use crate::operator_library::OperatorLibrary;
-
-pub type NodeId = NodeIndex;
-pub type EdgeId = EdgeIndex;
-pub type PatchGraph = StableGraph<Node, EdgeData>;
+use mouse_ui::node_autocomplete::{show_operator_autocomplete, show_sized_text_edit};
+use mouse_ui::operator_library::OperatorLibrary;
 
 const MARQUEE_MIN_AREA: f32 = 16.0;
 const PATCH_BORDER_PAD: f32 = 100.0;
@@ -46,455 +52,6 @@ struct MarqueeState {
     select_wires: bool,
 }
 
-#[derive(Clone, Debug, PartialEq)]
-pub enum PdObject {
-    OscTilde { freq: f32 },
-    PlusTilde,
-    MulTilde,
-    DacTilde,
-    Metro { ms: f32 },
-    Random { max: i32 },
-    FloatAtom { value: f32 },
-    Message { text: String },
-    Comment { text: String },
-    In,
-    Param,
-    Out,
-    DelayIn { id: Option<u8> },
-    DelayOut { id: Option<u8> },
-    Send { id: Option<u8> },
-    Receive { id: Option<u8> },
-    Combine,
-}
-
-#[derive(Default)]
-pub struct NodeAreaBody {
-    clicked_label: bool,
-    commit_edit: bool,
-    cancel_edit: bool,
-}
-
-struct NodeAreaShowResult {
-    rect: Rect,
-    body_response: egui::Response,
-    resize_delta: Vec2,
-    body: NodeAreaBody,
-}
-
-impl PdObject {
-    fn signal_label(kind: &str, id: Option<u8>) -> String {
-        match id {
-            Some(hex) => format!("{kind} #{hex:02X}"),
-            None => kind.to_owned(),
-        }
-    }
-
-    fn delay_label(kind: &str, id: Option<u8>) -> String {
-        Self::signal_label(kind, id)
-    }
-
-    pub fn label(&self) -> String {
-        match self {
-            Self::OscTilde { freq } => format!("osc~ {freq}"),
-            Self::PlusTilde => "+~".to_owned(),
-            Self::MulTilde => "*~".to_owned(),
-            Self::DacTilde => "dac~".to_owned(),
-            Self::Metro { ms } => format!("metro {ms}"),
-            Self::Random { max } => format!("random {max}"),
-            Self::FloatAtom { value } => format!("{value:.3}"),
-            Self::Message { text } => text.clone(),
-            Self::Comment { text } => text.clone(),
-            Self::In => "in".to_owned(),
-            Self::Param => "param".to_owned(),
-            Self::Out => "out".to_owned(),
-            Self::DelayIn { id } => Self::delay_label("delay_in", *id),
-            Self::DelayOut { id } => Self::delay_label("delay_out", *id),
-            Self::Send { id } => Self::signal_label("send", *id),
-            Self::Receive { id } => Self::signal_label("receive", *id),
-            Self::Combine => "combine".to_owned(),
-        }
-    }
-
-    pub fn bracketed_label(&self) -> String {
-        match self {
-            Self::Comment { text } => text.clone(),
-            Self::Message { text } => format!("{text}"),
-            Self::FloatAtom { .. } => self.label(),
-            _ => format!("[{}]", self.label()),
-        }
-    }
-
-    pub fn inlets(&self) -> usize {
-        match self {
-            Self::Comment { .. } | Self::Receive { .. } => 0,
-            Self::In | Self::DelayIn { .. } => 0,
-            Self::Combine => 2,
-            Self::Send { .. } | Self::Out | Self::DelayOut { .. } => 1,
-            _ => 1,
-        }
-    }
-
-    pub fn outlets(&self) -> usize {
-        match self {
-            Self::Comment { .. } | Self::Send { .. } | Self::Out | Self::DacTilde => 0,
-            Self::In | Self::Param | Self::DelayIn { .. } => 1,
-            Self::Combine => 1,
-            Self::Receive { .. } | Self::DelayOut { .. } => 1,
-            _ => 1,
-        }
-    }
-
-    pub fn is_comment(&self) -> bool {
-        matches!(self, Self::Comment { .. })
-    }
-
-    pub fn is_send(&self) -> bool {
-        matches!(self, Self::Send { .. })
-    }
-
-    pub fn is_receive(&self) -> bool {
-        matches!(self, Self::Receive { .. })
-    }
-
-    pub fn signal_hex(&self) -> Option<u8> {
-        match self {
-            Self::DelayIn { id }
-            | Self::DelayOut { id }
-            | Self::Send { id }
-            | Self::Receive { id } => *id,
-            _ => None,
-        }
-    }
-
-    pub fn is_number_box(&self) -> bool {
-        matches!(self, Self::FloatAtom { .. })
-    }
-
-    pub fn edit_text(&self) -> String {
-        match self {
-            Self::Comment { text } | Self::Message { text } => text.clone(),
-            Self::FloatAtom { value } => format!("{value}"),
-            Self::OscTilde { freq } => format!("osc~ {freq}"),
-            Self::Metro { ms } => format!("metro {ms}"),
-            Self::Random { max } => format!("random {max}"),
-            Self::PlusTilde => "+~".to_owned(),
-            Self::MulTilde => "*~".to_owned(),
-            Self::DacTilde => "dac~".to_owned(),
-            Self::In => "in".to_owned(),
-            Self::Param => "param".to_owned(),
-            Self::Out => "out".to_owned(),
-            Self::DelayIn { id } => Self::delay_label("delay_in", *id),
-            Self::DelayOut { id } => Self::delay_label("delay_out", *id),
-            Self::Send { id } => Self::signal_label("send", *id),
-            Self::Receive { id } => Self::signal_label("receive", *id),
-            Self::Combine => "combine".to_owned(),
-        }
-    }
-
-    pub fn apply_edit_text(&mut self, text: &str) {
-        *self = object_from_label(text);
-    }
-
-    /// Display widgets inside a fixed-size node area.
-    pub fn show_display_ui(
-        &self,
-        ui: &mut Ui,
-        label: &str,
-        selected: bool,
-        zoom: f32,
-    ) -> NodeAreaBody {
-        let mut body = NodeAreaBody::default();
-
-        if self.is_comment() {
-            let label_response = ui.label(
-                RichText::new(label).font(label_font(zoom)).color(PAPER_DIM),
-            );
-            if label_response.clicked() {
-                body.clicked_label = true;
-            }
-            return body;
-        }
-
-        let font = label_font(zoom);
-        let job = layout_job(label, font, selected);
-        let galley = ui.painter().layout_job(job);
-        let op_color = if selected { INK } else { PAPER };
-        let (rect, label_response) =
-            ui.allocate_exact_size(ui.available_size_before_wrap(), Sense::click());
-        ui.painter().galley(
-            pos2(
-                rect.min.x + LABEL_INSET_X * zoom,
-                rect.center().y - galley.size().y * 0.5,
-            ),
-            galley,
-            op_color,
-        );
-        if label_response.clicked() {
-            body.clicked_label = true;
-        }
-        body
-    }
-
-    /// Edit widgets inside a fixed-size node area.
-    pub fn show_edit_ui(
-        &self,
-        ui: &mut Ui,
-        buffer: &mut String,
-        edit_id: Id,
-        zoom: f32,
-        library: &OperatorLibrary,
-    ) -> NodeAreaBody {
-        let mut body = NodeAreaBody::default();
-        let font = label_font(zoom);
-        let inner_width = ui.available_width();
-        let inner_height = ui.available_height();
-        let skip_autocomplete = self.is_comment();
-
-        let edit = if self.is_comment() || matches!(self, Self::Message { .. }) {
-            egui::TextEdit::multiline(buffer)
-                .font(font)
-                .desired_width(inner_width)
-                .desired_rows(1)
-                .margin(egui::Margin::symmetric(LABEL_INSET_X as i8, 2))
-                .text_color(INK)
-                .background_color(PAPER)
-                .frame(egui::Frame::NONE)
-        } else {
-            egui::TextEdit::singleline(buffer)
-                .font(font)
-                .desired_width(inner_width)
-                .margin(egui::Margin::symmetric(LABEL_INSET_X as i8, 2))
-                .text_color(INK)
-                .background_color(PAPER)
-                .frame(egui::Frame::NONE)
-        };
-
-        let output = show_sized_text_edit(
-            ui,
-            vec2(inner_width, inner_height),
-            edit.id(edit_id.with("edit")),
-        );
-        output.response.request_focus();
-
-        let ac = show_operator_autocomplete(
-            ui,
-            edit_id,
-            output.response.rect,
-            buffer,
-            output.cursor_range,
-            library,
-            skip_autocomplete,
-        );
-
-        if !self.is_comment()
-            && !matches!(self, Self::Message { .. })
-            && ui.input(|i| i.key_pressed(Key::Enter))
-        {
-            body.commit_edit = true;
-        }
-        if ui.input(|i| i.key_pressed(Key::Escape)) {
-            if ac.dismiss_popup {
-                ui.input_mut(|i| i.consume_key(Default::default(), Key::Escape));
-            } else {
-                body.cancel_edit = true;
-            }
-        }
-        body
-    }
-
-    /// Object label for `(node … :text …)` in `.lop` patch export.
-    pub fn lop_text(&self, io_index: Option<usize>) -> String {
-        match self {
-            Self::In => format!("in {}", io_index.unwrap_or(1)),
-            Self::Out => format!("out {}", io_index.unwrap_or(1)),
-            Self::Param => format!("param {}", io_index.unwrap_or(1)),
-            Self::PlusTilde => "+".to_owned(),
-            Self::MulTilde => "*".to_owned(),
-            Self::OscTilde { freq } => format!("osc~ {freq}"),
-            Self::DacTilde => "dac~".to_owned(),
-            Self::Metro { ms } => format!("metro {ms}"),
-            Self::Random { max } => format!("random {max}"),
-            Self::FloatAtom { value } => format!("{value}"),
-            Self::Message { text } => text.clone(),
-            Self::Comment { text } => text.clone(),
-            Self::DelayIn { id } => Self::delay_label("delay_in", *id),
-            Self::DelayOut { id } => Self::delay_label("delay_out", *id),
-            Self::Send { id } => Self::signal_label("send", *id),
-            Self::Receive { id } => Self::signal_label("receive", *id),
-            Self::Combine => "combine".to_owned(),
-        }
-    }
-
-    /// Optional `:bind` symbol for IO boxes in `.lop` patch export.
-    pub fn lop_bind(&self, io_index: Option<usize>) -> Option<String> {
-        match self {
-            Self::In => Some(format!("_in_{}", io_index.unwrap_or(1))),
-            Self::Out => Some(format!("_out_{}", io_index.unwrap_or(1))),
-            Self::Param => Some(format!("_param_{}", io_index.unwrap_or(1))),
-            _ => None,
-        }
-    }
-}
-
-#[derive(Clone, Debug)]
-pub struct Node {
-    pub object: PdObject,
-    /// Exact text shown in the box; preserved verbatim while editing.
-    pub label: String,
-    pub pos: Pos2,
-    pub size: Vec2,
-    /// Stable `obj-N` id for `.lop` patch export (matches fragment_interlay).
-    pub box_id: Option<String>,
-    pub screen_rect: Rect,
-    pub inlet_t: Vec<f32>,
-    pub outlet_t: Vec<f32>,
-    pub inlet_positions: Vec<Pos2>,
-    pub outlet_positions: Vec<Pos2>,
-    pub selected: bool,
-}
-
-#[derive(Clone, Debug, PartialEq)]
-pub struct EdgeData {
-    pub from_port: usize,
-    pub to_port: usize,
-    pub selected: bool,
-}
-
-/// Pan/zoom viewport state for [`Scene`].
-#[derive(Clone, Copy, Debug)]
-struct CanvasView {
-    scene_rect: Rect,
-}
-
-impl CanvasView {
-    const MIN_ZOOM: f32 = 0.25;
-    const MAX_ZOOM: f32 = 4.0;
-
-    fn new() -> Self {
-        Self {
-            scene_rect: Rect::NOTHING,
-        }
-    }
-}
-
-/// Show the patch canvas scene without egui [`Scene`]'s built-in pan/zoom (we handle that
-/// separately so scroll works over nodes and is not applied twice on the background).
-fn show_patch_scene<R>(
-    ui: &mut Ui,
-    scene_rect: &mut Rect,
-    add_contents: impl FnOnce(&mut Ui) -> R,
-) -> InnerResponse<R> {
-    let zoom_range = Rangef::new(CanvasView::MIN_ZOOM, CanvasView::MAX_ZOOM);
-    let max_inner_size = Vec2::splat(SCENE_MAX_SIZE);
-
-    let (outer_rect, _) =
-        ui.allocate_exact_size(ui.available_size_before_wrap(), Sense::hover());
-    apply_canvas_navigation(ui, outer_rect, scene_rect);
-
-    let mut to_global = fit_scene_to_view(outer_rect, *scene_rect, zoom_range);
-    let scene_rect_was_good =
-        to_global.is_valid() && scene_rect.is_finite() && scene_rect.size() != Vec2::ZERO;
-
-    let scene_layer_id = LayerId::new(ui.layer_id().order, ui.id().with("scene_area"));
-    ui.ctx().set_sublayer(ui.layer_id(), scene_layer_id);
-
-    let mut local_ui = ui.new_child(
-        UiBuilder::new()
-            .layer_id(scene_layer_id)
-            .max_rect(Rect::from_min_size(Pos2::ZERO, max_inner_size))
-            .sense(Sense::empty()),
-    );
-
-    let pan_response = local_ui.response();
-    local_ui.set_clip_rect(to_global.inverse() * outer_rect);
-    local_ui
-        .ctx()
-        .set_transform_layer(scene_layer_id, to_global);
-
-    let inner = add_contents(&mut local_ui);
-
-    if !scene_rect_was_good {
-        let inner_rect = local_ui.min_rect();
-        to_global = fit_scene_to_view(outer_rect, inner_rect, zoom_range);
-        *scene_rect = to_global.inverse() * outer_rect;
-    }
-
-    InnerResponse {
-        response: pan_response,
-        inner,
-    }
-}
-
-/// Match [`Scene`]'s fit transform (scene coords → screen).
-fn fit_scene_to_view(view_rect: Rect, scene_rect: Rect, zoom_range: Rangef) -> TSTransform {
-    let scale = view_rect.size() / scene_rect.size();
-    let scale = scale.min_elem();
-    let scale = zoom_range.clamp(scale);
-    let center_in_global = view_rect.center().to_vec2();
-    let center_scene = scene_rect.center().to_vec2();
-    TSTransform::from_translation(center_in_global - scale * center_scene)
-        * TSTransform::from_scaling(scale)
-}
-
-fn apply_canvas_navigation(ui: &Ui, view_rect: Rect, scene_rect: &mut Rect) {
-    if !view_rect.is_positive() || !scene_rect.is_positive() {
-        return;
-    }
-
-    let zoom_range = Rangef::new(CanvasView::MIN_ZOOM, CanvasView::MAX_ZOOM);
-    let mut to_global = fit_scene_to_view(view_rect, *scene_rect, zoom_range);
-
-    let Some(pointer) = ui.input(|i| i.pointer.latest_pos()) else {
-        return;
-    };
-    if !view_rect.contains(pointer) {
-        return;
-    }
-
-    let mut changed = false;
-
-    if ui.input(|i| i.pointer.button_down(PointerButton::Middle)) {
-        let delta = ui.input(|i| i.pointer.delta());
-        if delta.length_sq() > 0.0 {
-            to_global.translation += to_global.scaling * delta;
-            changed = true;
-        }
-    }
-
-    let zoom_delta = ui.input(|i| i.zoom_delta());
-    let pan_delta = ui.input(|i| i.smooth_scroll_delta());
-    if zoom_delta != 1.0 || pan_delta != Vec2::ZERO {
-        let pointer_in_scene = to_global.inverse() * pointer;
-
-        if zoom_delta != 1.0 {
-            let zd = zoom_delta.clamp(
-                zoom_range.min / to_global.scaling,
-                zoom_range.max / to_global.scaling,
-            );
-            to_global = to_global
-                * TSTransform::from_translation(pointer_in_scene.to_vec2())
-                * TSTransform::from_scaling(zd)
-                * TSTransform::from_translation(-pointer_in_scene.to_vec2());
-            to_global.scaling = zoom_range.clamp(to_global.scaling);
-        }
-
-        to_global = TSTransform::from_translation(pan_delta) * to_global;
-        changed = true;
-    }
-
-    if changed {
-        *scene_rect = to_global.inverse() * view_rect;
-    }
-}
-
-fn scene_layer_id(parent: Id, order: Order) -> LayerId {
-    LayerId::new(order, parent.with("scene_area"))
-}
-
-fn scene_transform(ctx: &Context, parent: Id, order: Order) -> TSTransform {
-    ctx.layer_transform_to_global(scene_layer_id(parent, order))
-        .unwrap_or(TSTransform::IDENTITY)
-}
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 enum WireEndpoint {
@@ -563,8 +120,8 @@ struct NodePointerPress {
 
 pub struct PdPatchEditor {
     graph: PatchGraph,
-    view: CanvasView,
-    layout_view: CanvasView,
+    mouse_view: CanvasView,
+    keyboard: KeyboardUi,
     split_screen: bool,
     pending_wires: Vec<PendingWire>,
     wire_drag_active: bool,
@@ -575,7 +132,7 @@ pub struct PdPatchEditor {
     /// Node size when editing started; restored on cancel.
     edit_start_size: Option<Vec2>,
     delay_pairs: HashMap<NodeId, NodeId>,
-    layout_preview_cache: Option<(u64, crate::layout_adapter::LayoutPreview)>,
+    layout_preview_cache: Option<(u64, LayoutPreview)>,
     debug_auto_combine: bool,
     debug_auto_send_receive: bool,
     debug_auto_delay: bool,
@@ -593,7 +150,7 @@ pub struct PdPatchEditor {
 
 impl PdPatchEditor {
     fn format_patch_lop(&self) -> String {
-        crate::patch_export::export_patch(&self.graph, &self.patch_name)
+        patch_graph::export::export_patch(&self.graph, &self.patch_name)
     }
 
     pub fn demo_patch() -> Self {
@@ -696,10 +253,14 @@ impl PdPatchEditor {
         }
     }
 
+    fn canvas_keyboard_shortcuts_active(&self) -> bool {
+        self.editing_node.is_none()
+    }
+
     pub fn organize_layout(&mut self) {
-        crate::layout_adapter::organize_patch(
+        patch_graph::layout_adapter::organize_patch(
             &mut self.graph,
-            &patch_layout::LayoutConfig::default(),
+            &patch_graph::LayoutConfig::default(),
         );
         self.invalidate_layout_preview();
     }
@@ -1319,7 +880,7 @@ impl PdPatchEditor {
         node_id: NodeId,
         port: usize,
         is_outlet: bool,
-        preview: Option<&crate::layout_adapter::LayoutPreview>,
+        preview: Option<&patch_graph::layout_adapter::LayoutPreview>,
     ) -> Pos2 {
         let node = &self.graph[node_id];
         let rect = self.node_world_rect_for(node_id, preview);
@@ -1980,9 +1541,9 @@ impl Default for PdPatchEditor {
     fn default() -> Self {
         Self {
             graph: PatchGraph::default(),
-            view: CanvasView::new(),
-            layout_view: CanvasView::new(),
-            split_screen: false,
+            mouse_view: CanvasView::new(),
+            keyboard: KeyboardUi::default(),
+            split_screen: true,
             pending_wires: Vec::new(),
             wire_drag_active: false,
             rewire_state: None,
@@ -2004,6 +1565,7 @@ impl Default for PdPatchEditor {
             redo_stack: Vec::new(),
             node_pointer_press: None,
             operator_library: OperatorLibrary::load_preferred(),
+            
         }
     }
 }
@@ -2047,13 +1609,13 @@ impl eframe::App for PdPatchEditor {
             })
             .show_inside(ui, |ui| {
                 if self.split_screen {
-                    let preview = crate::layout_adapter::layout_preview_cached(
+                    let preview = layout_preview_cached(
                         &self.graph,
                         &mut self.layout_preview_cache,
                     )
                     .clone();
 
-                    egui::Panel::right("organized_layout_pane")
+                    egui::Panel::right("keyboard_ui")
                         .resizable(true)
                         .min_size(200.0)
                         .default_size(ui.available_width() * 0.5)
@@ -2065,9 +1627,16 @@ impl eframe::App for PdPatchEditor {
                         .show_inside(ui, |ui| {
                             ui.horizontal(|ui| {
                                 ui.label(RichText::new("Sorted layout").strong());
+                                ui.label(
+                                    RichText::new("↑↓ along wires · ←→ same row")
+                                        .small()
+                                        .color(PAPER_DIM),
+                                );
                             });
                             ui.separator();
-                            self.canvas_preview_ui(ui, &preview);
+                            let default_scene = self.default_scene_view_rect();
+                            let editing = self.editing_node;
+                            self.keyboard.show(ui, &self.graph, &preview, editing, default_scene);
                         });
 
                     egui::CentralPanel::default()
@@ -2081,10 +1650,10 @@ impl eframe::App for PdPatchEditor {
                                 ui.label(RichText::new("Raw patch").strong());
                             });
                             ui.separator();
-                            self.canvas_ui(ui, true);
+                            self.mouse_ui(ui, true);
                         });
                 } else {
-                    self.canvas_ui(ui, true);
+                    self.mouse_ui(ui, true);
                 }
             });
 
@@ -2098,8 +1667,8 @@ struct CanvasFrameState {
 }
 
 impl PdPatchEditor {
-    fn canvas_ui(&mut self, ui: &mut Ui, editable: bool) {
-        let mut scene_rect = self.view.scene_rect;
+    fn mouse_ui(&mut self, ui: &mut Ui, editable: bool) {
+        let mut scene_rect = self.mouse_view.scene_rect;
         if !scene_rect.is_positive() {
             scene_rect = self.default_scene_view_rect();
         }
@@ -2134,8 +1703,6 @@ impl PdPatchEditor {
             }
 
             let clear_alt_drag = scene_ui.input(|i| i.pointer.primary_released());
-            self.shift_drag_splice_preview = None;
-            self.shift_drag_eligible.clear();
 
             let mut node_order: Vec<NodeId> = self.graph.node_indices().collect();
             node_order.sort_by_key(|id| self.graph[*id].object.is_comment());
@@ -2158,6 +1725,7 @@ impl PdPatchEditor {
             if scene_ui.input(|i| i.pointer.primary_released()) {
                 self.node_pointer_press = None;
                 self.shift_drag_eligible.clear();
+                self.shift_drag_splice_preview = None;
             }
             self.show_all_ports(scene_ui, canvas_rect, transform);
             self.draw_patch_border(&painter);
@@ -2165,10 +1733,10 @@ impl PdPatchEditor {
             self.draw_shift_drag_splice_preview(&painter);
             self.show_wire_handles(scene_ui, canvas_rect, transform);
             self.draw_pending_wire(&painter, &ctx, transform);
-            self.draw_marquee(scene_ui, canvas_rect);
+            self.draw_marquee(&painter, transform);
         });
 
-        self.view.scene_rect = scene_rect;
+        self.mouse_view.scene_rect = scene_rect;
 
         if editable && frame.canvas_rect.is_positive() {
             let CanvasFrameState {
@@ -2183,48 +1751,10 @@ impl PdPatchEditor {
         }
     }
 
-    fn canvas_preview_ui(&mut self, ui: &mut Ui, preview: &crate::layout_adapter::LayoutPreview) {
-        let mut scene_rect = self.layout_view.scene_rect;
-        if !scene_rect.is_positive() {
-            scene_rect = self.default_scene_view_rect();
-        }
-
-        let parent_id = ui.id();
-        let parent_order = ui.layer_id().order;
-
-        show_patch_scene(ui, &mut scene_rect, |scene_ui| {
-            let ctx = scene_ui.ctx().clone();
-            let scene_layer = scene_layer_id(parent_id, parent_order);
-            let transform = scene_transform(&ctx, parent_id, parent_order);
-            let world_clip = scene_ui.clip_rect();
-            let mut painter = ctx.layer_painter(scene_layer);
-            painter.set_clip_rect(world_clip);
-            draw_grid(&painter, world_clip);
-
-            let mut node_order: Vec<NodeId> = self.graph.node_indices().collect();
-            node_order.sort_by_key(|id| self.graph[*id].object.is_comment());
-
-            for node_id in node_order {
-                self.paint_node_world(
-                    &painter,
-                    world_clip,
-                    node_id,
-                    preview,
-                    transform.scaling,
-                );
-            }
-            self.paint_ports_world(&painter, world_clip, preview, transform.scaling);
-            self.draw_patch_border_world(&painter, world_clip, preview);
-            self.draw_wires_on_painter(&painter, Some(preview));
-        });
-
-        self.layout_view.scene_rect = scene_rect;
-    }
-
     fn world_pos_for_node(
         &self,
         node_id: NodeId,
-        preview: Option<&crate::layout_adapter::LayoutPreview>,
+        preview: Option<&patch_graph::layout_adapter::LayoutPreview>,
     ) -> Pos2 {
         if let Some(preview) = preview {
             if let Some(pos) = preview.positions.get(&node_id.index()) {
@@ -2237,7 +1767,7 @@ impl PdPatchEditor {
     fn node_size_for_preview(
         &self,
         node_id: NodeId,
-        preview: Option<&crate::layout_adapter::LayoutPreview>,
+        preview: Option<&patch_graph::layout_adapter::LayoutPreview>,
     ) -> Vec2 {
         if let Some(preview) = preview {
             if let Some(size) = preview.sizes.get(&node_id.index()) {
@@ -2250,7 +1780,7 @@ impl PdPatchEditor {
     fn node_world_rect_for(
         &self,
         node_id: NodeId,
-        preview: Option<&crate::layout_adapter::LayoutPreview>,
+        preview: Option<&patch_graph::layout_adapter::LayoutPreview>,
     ) -> Rect {
         Rect::from_min_size(
             self.world_pos_for_node(node_id, preview),
@@ -2263,8 +1793,9 @@ impl PdPatchEditor {
         painter: &egui::Painter,
         world_clip: Rect,
         node_id: NodeId,
-        preview: &crate::layout_adapter::LayoutPreview,
+        preview: &patch_graph::layout_adapter::LayoutPreview,
         zoom: f32,
+        keyboard_focus: bool,
     ) {
         let node = &self.graph[node_id];
         let rect = self.node_world_rect_for(node_id, Some(preview));
@@ -2286,7 +1817,7 @@ impl PdPatchEditor {
             return;
         }
 
-        let frame = style::node_frame(false, false);
+        let frame = style::node_frame(keyboard_focus, false);
         painter.add(frame.paint(rect));
 
         let font = label_font(zoom);
@@ -2306,7 +1837,7 @@ impl PdPatchEditor {
         &self,
         painter: &egui::Painter,
         world_clip: Rect,
-        preview: &crate::layout_adapter::LayoutPreview,
+        preview: &patch_graph::layout_adapter::LayoutPreview,
         zoom: f32,
     ) {
         for node_id in self.graph.node_indices() {
@@ -2343,7 +1874,7 @@ impl PdPatchEditor {
         &self,
         painter: &egui::Painter,
         world_clip: Rect,
-        preview: &crate::layout_adapter::LayoutPreview,
+        preview: &patch_graph::layout_adapter::LayoutPreview,
     ) {
         let mut bounds = Rect::NOTHING;
         let mut any = false;
@@ -2382,14 +1913,12 @@ impl PdPatchEditor {
     ) {
         self.handle_undo_redo_input(ui);
 
-        if ui.input(|i| i.key_pressed(Key::Delete) || i.key_pressed(Key::Backspace)) {
-            self.delete_selected();
-        }
+        if self.canvas_keyboard_shortcuts_active() {
+            if ui.input(|i| i.key_pressed(Key::Delete) || i.key_pressed(Key::Backspace)) {
+                self.delete_selected();
+            }
 
-        if ui.input(|i| i.key_pressed(Key::Escape)) {
-            if self.editing_node.is_some() {
-                self.stop_editing(false);
-            } else {
+            if ui.input(|i| i.key_pressed(Key::Escape)) {
                 self.cancel_patching();
             }
         }
@@ -2459,20 +1988,19 @@ impl PdPatchEditor {
         }
     }
 
-    fn draw_marquee(&self, ui: &mut Ui, canvas_rect: Rect) {
+    fn draw_marquee(&self, painter: &egui::Painter, transform: TSTransform) {
         let Some(marquee) = self.marquee else {
             return;
         };
 
-        let rect = marquee_rect(marquee);
-        let painter = ui.painter_at(canvas_rect);
+        let world_rect = rect_in_world_space(transform, marquee_rect(marquee));
         painter.rect_filled(
-            rect,
+            world_rect,
             CornerRadius::ZERO,
             Color32::from_rgba_premultiplied(PAPER.r(), PAPER.g(), PAPER.b(), 28),
         );
         painter.rect_stroke(
-            rect,
+            world_rect,
             CornerRadius::ZERO,
             Stroke::new(LINE_W, Color32::from_rgba_premultiplied(PAPER.r(), PAPER.g(), PAPER.b(), 200)),
             egui::StrokeKind::Outside,
@@ -2791,7 +2319,7 @@ impl PdPatchEditor {
                 zoom,
                 movable,
                 false,
-                |ui| object.show_edit_ui(ui, &mut edit_buffer, area_id, zoom, library),
+                |ui| object_ui::show_edit_ui(&object, ui, &mut edit_buffer, area_id, zoom, library),
             );
             self.edit_buffer = edit_buffer;
             node_size = world_size.max(estimate_text_box_size(&self.edit_buffer, &object));
@@ -2808,7 +2336,7 @@ impl PdPatchEditor {
                 zoom,
                 movable,
                 resizable && was_selected,
-                |ui| object.show_display_ui(ui, &node_label, was_selected, zoom),
+                |ui| object_ui::show_display_ui(&object, ui, &node_label, was_selected, zoom),
             )
         };
 
@@ -2909,6 +2437,7 @@ impl PdPatchEditor {
                     if let Some(pointer) = pointer {
                         self.try_shift_drag_insert_on_wire(node_id, pointer, world_rect, transform);
                     }
+                    self.shift_drag_splice_preview = None;
                 }
 
                 let drag_delta_world = area_result.body_response.drag_delta() / zoom;
@@ -3154,7 +2683,7 @@ impl PdPatchEditor {
     fn draw_wires_on_painter(
         &self,
         painter: &egui::Painter,
-        preview: Option<&crate::layout_adapter::LayoutPreview>,
+        preview: Option<&patch_graph::layout_adapter::LayoutPreview>,
     ) {
         let omit_edge = self.shift_drag_splice_preview.map(|p| p.edge_id);
         for edge_id in self.graph.edge_indices() {
@@ -3197,7 +2726,7 @@ impl PdPatchEditor {
     fn edge_bezier_points_for_preview(
         &self,
         edge_id: EdgeId,
-        preview: Option<&crate::layout_adapter::LayoutPreview>,
+        preview: Option<&patch_graph::layout_adapter::LayoutPreview>,
     ) -> Option<[Pos2; 4]> {
         let (from_id, to_id) = self.graph.edge_endpoints(edge_id)?;
         let edge = &self.graph[edge_id];
@@ -3211,7 +2740,7 @@ impl PdPatchEditor {
         node_id: NodeId,
         port: usize,
         is_outlet: bool,
-        preview: Option<&crate::layout_adapter::LayoutPreview>,
+        preview: Option<&patch_graph::layout_adapter::LayoutPreview>,
     ) -> Pos2 {
         let node = &self.graph[node_id];
         let world = preview
@@ -3272,6 +2801,13 @@ impl PdPatchEditor {
             draw_bezier_wire(painter, points, false);
         }
     }
+}
+
+struct NodeAreaShowResult {
+    rect: Rect,
+    body_response: egui::Response,
+    resize_delta: Vec2,
+    body: NodeAreaBody,
 }
 
 fn show_node_area(
@@ -3344,326 +2880,6 @@ fn show_node_area(
     }
 }
 
-fn random_unused_delay_hex(used: &HashSet<u8>) -> u8 {
-    use std::time::{SystemTime, UNIX_EPOCH};
-
-    let mut seed = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .map(|duration| duration.as_nanos() as u64)
-        .unwrap_or(0);
-
-    for _ in 0..256 {
-        seed = seed.wrapping_mul(1_103_515_245).wrapping_add(12_345);
-        let id = (seed >> 16) as u8;
-        if !used.contains(&id) {
-            return id;
-        }
-    }
-
-    (0..=255)
-        .find(|id| !used.contains(id))
-        .unwrap_or(0)
-}
-
-fn parse_delay_hex(token: Option<&str>) -> Option<u8> {
-    let token = token?;
-    let hex_str = token.strip_prefix('#').unwrap_or(token);
-    u8::from_str_radix(hex_str, 16).ok()
-}
-
-fn find_cycle_nodes(graph: &PatchGraph, from_node: NodeId, to_node: NodeId) -> Vec<NodeId> {
-    find_path_nodes(graph, to_node, from_node).unwrap_or_else(|| vec![from_node, to_node])
-}
-
-fn find_path_nodes(graph: &PatchGraph, start: NodeId, goal: NodeId) -> Option<Vec<NodeId>> {
-    if start == goal {
-        return Some(vec![start]);
-    }
-
-    let mut visited = HashSet::new();
-    let mut queue = VecDeque::from([start]);
-    let mut parent = HashMap::new();
-    visited.insert(start);
-
-    while let Some(node) = queue.pop_front() {
-        for edge in graph.edges(node) {
-            let next = edge.target();
-            if !visited.insert(next) {
-                continue;
-            }
-            parent.insert(next, node);
-            if next == goal {
-                let mut path = vec![goal];
-                let mut current = goal;
-                while current != start {
-                    current = parent[&current];
-                    path.push(current);
-                }
-                path.reverse();
-                return Some(path);
-            }
-            queue.push_back(next);
-        }
-    }
-
-    None
-}
-
-fn cycle_vertical_bounds(graph: &PatchGraph, cycle_nodes: &[NodeId]) -> (f32, f32, f32) {
-    let mut min_top = f32::INFINITY;
-    let mut max_bottom = f32::NEG_INFINITY;
-    let mut min_x = f32::INFINITY;
-    let mut max_x = f32::NEG_INFINITY;
-
-    for &id in cycle_nodes {
-        let node = &graph[id];
-        min_top = min_top.min(node.pos.y);
-        max_bottom = max_bottom.max(node.pos.y + node.size.y);
-        min_x = min_x.min(node.pos.x);
-        max_x = max_x.max(node.pos.x + node.size.x);
-    }
-
-    let center_x = (min_x + max_x) / 2.0;
-    (min_top, max_bottom, center_x)
-}
-
-fn parse_pd_object_text(text: &str) -> PdObject {
-    let stripped = strip_brackets(text.trim());
-    if stripped.is_empty() {
-        return PdObject::Message {
-            text: String::new(),
-        };
-    }
-
-    let mut parts = stripped.split_whitespace();
-    let op = parts.next().unwrap_or("");
-    match op {
-        "osc~" => PdObject::OscTilde {
-            freq: parts
-                .next()
-                .and_then(|s| s.parse().ok())
-                .unwrap_or(440.0),
-        },
-        "+~" => PdObject::PlusTilde,
-        "*~" => PdObject::MulTilde,
-        "dac~" => PdObject::DacTilde,
-        "in" => PdObject::In,
-        "param" => PdObject::Param,
-        "out" => PdObject::Out,
-        "delay_in" => PdObject::DelayIn {
-            id: parse_delay_hex(parts.next()),
-        },
-        "delay_out" => PdObject::DelayOut {
-            id: parse_delay_hex(parts.next()),
-        },
-        "send" => PdObject::Send {
-            id: parse_delay_hex(parts.next()),
-        },
-        "receive" => PdObject::Receive {
-            id: parse_delay_hex(parts.next()),
-        },
-        "combine" => PdObject::Combine,
-        "metro" => PdObject::Metro {
-            ms: parts.next().and_then(|s| s.parse().ok()).unwrap_or(500.0),
-        },
-        "random" => PdObject::Random {
-            max: parts.next().and_then(|s| s.parse().ok()).unwrap_or(100),
-        },
-        _ if op.parse::<f32>().is_ok() && parts.next().is_none() => PdObject::FloatAtom {
-            value: op.parse().unwrap_or(0.0),
-        },
-        _ => PdObject::Message {
-            text: stripped.to_owned(),
-        },
-    }
-}
-
-fn show_wire_handle_widget(
-    ctx: &Context,
-    id: Id,
-    screen_center: Pos2,
-    combined: bool,
-    canvas_clip: Rect,
-    zoom: f32,
-) -> egui::Response {
-    let size = port_size(zoom) * if combined { 1.35 } else { 1.1 };
-    let top_left = screen_center - Vec2::splat(size * 0.5);
-
-    Area::new(id)
-        .fixed_pos(top_left)
-        .order(Order::Foreground)
-        .constrain(false)
-        .interactable(true)
-        .fade_in(false)
-        .show(ctx, |ui| {
-            ui.set_clip_rect(canvas_clip);
-            let (rect, response) = ui.allocate_exact_size(
-                Vec2::splat(size),
-                Sense::click_and_drag().union(Sense::hover()),
-            );
-            paint_wire_handle(ui.painter(), rect.center(), response.hovered(), zoom);
-            response
-        })
-        .inner
-}
-
-fn show_port_widget(
-    ctx: &Context,
-    id: Id,
-    screen_center: Pos2,
-    selected: bool,
-    highlight: PortHighlight,
-    canvas_clip: Rect,
-    zoom: f32,
-) -> egui::Response {
-    let size = port_size(zoom);
-    let top_left = screen_center - Vec2::splat(size * 0.5);
-
-    Area::new(id)
-        .fixed_pos(top_left)
-        .order(Order::Foreground)
-        .constrain(false)
-        .interactable(true)
-        .fade_in(false)
-        .show(ctx, |ui| {
-            ui.set_clip_rect(canvas_clip);
-            let (rect, response) = ui.allocate_exact_size(
-                Vec2::splat(size),
-                Sense::click_and_drag().union(Sense::hover()),
-            );
-            paint_port_square(ui.painter(), rect.center(), selected, highlight, zoom);
-            response
-        })
-        .inner
-}
-
-fn socket_position(node: &Node, index: usize, is_outlet: bool) -> Pos2 {
-    let positions = if is_outlet {
-        &node.outlet_positions
-    } else {
-        &node.inlet_positions
-    };
-
-    if let Some(pos) = positions.get(index) {
-        if pos.x.is_finite() && pos.y.is_finite() {
-            return *pos;
-        }
-    }
-
-    let rect = node_draw_rect(node);
-    let ts = if is_outlet { &node.outlet_t } else { &node.inlet_t };
-    let t = ts.get(index).copied().unwrap_or(0.0);
-    port_position_t(rect, t, is_outlet, WORLD_ZOOM)
-}
-
-fn node_world_rect(node: &Node) -> Rect {
-    Rect::from_min_size(node.pos, node.size)
-}
-
-fn node_layout_world_rect(node: &Node, transform: TSTransform) -> Rect {
-    if node.screen_rect.is_positive() {
-        rect_in_world_space(transform, node.screen_rect)
-    } else {
-        node_world_rect(node)
-    }
-}
-
-fn world_rect_to_screen(transform: TSTransform, world: Rect) -> Rect {
-    Rect::from_min_size(
-        transform * world.min,
-        world.size() * transform.scaling,
-    )
-}
-
-fn screen_to_world_pos(transform: TSTransform, screen: Pos2) -> Pos2 {
-    transform.inverse() * screen
-}
-
-fn world_to_screen_pos(transform: TSTransform, world: Pos2) -> Pos2 {
-    transform * world
-}
-
-fn node_visible_on_canvas(canvas: Rect, item: Rect) -> bool {
-    item.is_positive() && canvas.intersects(item)
-}
-
-fn node_visible_in_scene(world_clip: Rect, world_rect: Rect) -> bool {
-    if !world_rect.is_positive() {
-        return false;
-    }
-    world_clip.intersects(world_rect)
-}
-
-fn rect_in_world_space(transform: TSTransform, screen_rect: Rect) -> Rect {
-    let inv = transform.inverse();
-    Rect::from_points(&[
-        inv * screen_rect.left_top(),
-        inv * screen_rect.right_top(),
-        inv * screen_rect.right_bottom(),
-        inv * screen_rect.left_bottom(),
-    ])
-}
-
-fn node_draw_rect(node: &Node) -> Rect {
-    node_world_rect(node)
-}
-
-fn commit_node_label(node: &mut Node, text: &str) {
-    node.label = text.to_owned();
-    if node.object.is_comment() {
-        node.object = PdObject::Comment {
-            text: text.to_owned(),
-        };
-    } else {
-        node.object = object_from_label(text);
-    }
-    node.size = estimate_text_box_size(&node.label, &node.object);
-}
-
-/// Parse box text into a typed object when it round-trips; otherwise keep all text as a message.
-fn object_from_label(text: &str) -> PdObject {
-    if text.is_empty() {
-        return PdObject::Message {
-            text: String::new(),
-        };
-    }
-
-    let parsed = parse_pd_object_text(text);
-    if object_text_matches_label(&parsed, text) {
-        parsed
-    } else {
-        PdObject::Message {
-            text: text.to_owned(),
-        }
-    }
-}
-
-fn object_text_matches_label(object: &PdObject, text: &str) -> bool {
-    let trimmed = text.trim();
-    if trimmed.is_empty() {
-        return matches!(object, PdObject::Message { text } if text.is_empty());
-    }
-    object.edit_text().trim() == trimmed
-        || object.bracketed_label().trim() == trimmed
-        || strip_brackets(&object.bracketed_label()).trim() == strip_brackets(trimmed).trim()
-}
-
-fn estimate_node_size(object: &PdObject) -> Vec2 {
-    estimate_text_box_size(&object.bracketed_label(), object)
-}
-
-/// Size needed to display `text` in a node box (used while editing).
-fn estimate_text_box_size(text: &str, object: &PdObject) -> Vec2 {
-    let label = if text.is_empty() { "?" } else { text };
-    let width = min_box_width(label, object.inlets());
-    let height = if object.is_comment() {
-        let lines = label.lines().count().max(1);
-        BOX_H * 0.8 * lines as f32
-    } else {
-        BOX_H
-    };
-    vec2(width.max(48.0), height.max(if object.is_comment() { BOX_H * 0.8 } else { BOX_H }))
-}
 
 fn wire_handle_positions(points: [Pos2; 4], zoom: f32) -> [Pos2; 2] {
     let offset = port_size(zoom) * 2.4;
@@ -3924,6 +3140,34 @@ mod shift_drag_tests {
     }
 
     #[test]
+    fn shift_drag_insert_requires_eligibility_from_drag_start() {
+        let mut editor = chain_editor();
+        let middle = editor
+            .graph
+            .node_indices()
+            .find(|&id| matches!(editor.graph[id].object, PdObject::MulTilde))
+            .expect("middle");
+
+        editor.shift_drag_bridge_nodes(&[middle]);
+        let edge_id = editor.graph.edge_indices().next().expect("bridged edge");
+        let (from, to) = editor.graph.edge_endpoints(edge_id).expect("endpoints");
+        let from_out = editor.graph[from].outlet_positions[0];
+        let to_in = editor.graph[to].inlet_positions[0];
+        let wire_mid = from_out.lerp(to_in, 0.5);
+        let node_rect = Rect::from_center_size(wire_mid, editor.graph[middle].size);
+        let transform = TSTransform::IDENTITY;
+
+        // Without eligibility (cleared at frame start), insert is skipped.
+        editor.try_shift_drag_insert_on_wire(middle, wire_mid, node_rect, transform);
+        assert_eq!(edge_count(&editor), 1);
+
+        // Eligibility from drag-start must persist until pointer release.
+        editor.shift_drag_eligible.insert(middle);
+        editor.try_shift_drag_insert_on_wire(middle, wire_mid, node_rect, transform);
+        assert_eq!(edge_count(&editor), 2);
+    }
+
+    #[test]
     fn shift_drag_insert_rejects_comment() {
         let mut editor = PdPatchEditor::default();
         let a = editor.add_object(PdObject::In, pos2(0.0, 0.0));
@@ -3967,4 +3211,134 @@ mod shift_drag_tests {
 
         assert_eq!(edge_count(&editor), 2);
     }
+}
+
+fn show_wire_handle_widget(
+    ctx: &Context,
+    id: Id,
+    screen_center: Pos2,
+    combined: bool,
+    canvas_clip: Rect,
+    zoom: f32,
+) -> egui::Response {
+    let size = port_size(zoom) * if combined { 1.35 } else { 1.1 };
+    let top_left = screen_center - Vec2::splat(size * 0.5);
+
+    Area::new(id)
+        .fixed_pos(top_left)
+        .order(Order::Foreground)
+        .constrain(false)
+        .interactable(true)
+        .fade_in(false)
+        .show(ctx, |ui| {
+            ui.set_clip_rect(canvas_clip);
+            let (rect, response) = ui.allocate_exact_size(
+                Vec2::splat(size),
+                Sense::click_and_drag().union(Sense::hover()),
+            );
+            paint_wire_handle(ui.painter(), rect.center(), response.hovered(), zoom);
+            response
+        })
+        .inner
+}
+
+fn show_port_widget(
+    ctx: &Context,
+    id: Id,
+    screen_center: Pos2,
+    selected: bool,
+    highlight: PortHighlight,
+    canvas_clip: Rect,
+    zoom: f32,
+) -> egui::Response {
+    let size = port_size(zoom);
+    let top_left = screen_center - Vec2::splat(size * 0.5);
+
+    Area::new(id)
+        .fixed_pos(top_left)
+        .order(Order::Foreground)
+        .constrain(false)
+        .interactable(true)
+        .fade_in(false)
+        .show(ctx, |ui| {
+            ui.set_clip_rect(canvas_clip);
+            let (rect, response) = ui.allocate_exact_size(
+                Vec2::splat(size),
+                Sense::click_and_drag().union(Sense::hover()),
+            );
+            paint_port_square(ui.painter(), rect.center(), selected, highlight, zoom);
+            response
+        })
+        .inner
+}
+
+fn node_draw_rect(node: &Node) -> Rect {
+    Rect::from_min_size(node.pos, node.size)
+}
+
+fn socket_position(node: &Node, index: usize, is_outlet: bool) -> Pos2 {
+    let positions = if is_outlet {
+        &node.outlet_positions
+    } else {
+        &node.inlet_positions
+    };
+
+    if let Some(pos) = positions.get(index) {
+        if pos.x.is_finite() && pos.y.is_finite() {
+            return *pos;
+        }
+    }
+
+    let rect = node_draw_rect(node);
+    let ts = if is_outlet { &node.outlet_t } else { &node.inlet_t };
+    let t = ts.get(index).copied().unwrap_or(0.0);
+    port_position_t(rect, t, is_outlet, WORLD_ZOOM)
+}
+
+fn node_world_rect(node: &Node) -> Rect {
+    Rect::from_min_size(node.pos, node.size)
+}
+
+fn node_layout_world_rect(node: &Node, transform: TSTransform) -> Rect {
+    if node.screen_rect.is_positive() {
+        rect_in_world_space(transform, node.screen_rect)
+    } else {
+        node_world_rect(node)
+    }
+}
+
+fn world_rect_to_screen(transform: TSTransform, world: Rect) -> Rect {
+    Rect::from_min_size(
+        transform * world.min,
+        world.size() * transform.scaling,
+    )
+}
+
+fn screen_to_world_pos(transform: TSTransform, screen: Pos2) -> Pos2 {
+    transform.inverse() * screen
+}
+
+fn world_to_screen_pos(transform: TSTransform, world: Pos2) -> Pos2 {
+    transform * world
+}
+
+fn node_visible_on_canvas(canvas: Rect, item: Rect) -> bool {
+    item.is_positive() && canvas.intersects(item)
+}
+
+fn node_visible_in_scene(world_clip: Rect, world_rect: Rect) -> bool {
+    if !world_rect.is_positive() {
+        return false;
+    }
+    world_clip.intersects(world_rect)
+}
+
+fn rect_in_world_space(transform: TSTransform, screen_rect: Rect) -> Rect {
+    let inv = transform.inverse();
+    Rect::from_points(&[
+        inv * screen_rect.left_top(),
+        inv * screen_rect.right_top(),
+        inv * screen_rect.right_bottom(),
+        inv * screen_rect.left_bottom(),
+    ])
 }

@@ -5,13 +5,13 @@ use petgraph::graph::{DiGraph, NodeIndex};
 use petgraph::visit::EdgeRef;
 use petgraph::Direction;
 
-use crate::blocks::{
+use crate::layout::blocks::{
     build_unit_layout, effective_node_height, effective_node_width, is_dual_inlet_combiner,
     node_layout_height, node_layout_width, place_unit, translate_unit, unit_span_width, UnitLayout,
 };
-use crate::config::LayoutConfig;
-use crate::graph::{LayoutEdge, LayoutGraph, LayoutNodeId, LayoutResult, NodeKind, Point, DelayPairGroup};
-use crate::ports::{dual_inlet_node_width, dual_inlet_node_x, outlet_world_x, port_x_offset};
+use crate::layout::config::LayoutConfig;
+use crate::layout::layout_graph::{LayoutEdge, LayoutGraph, LayoutNodeId, LayoutResult, NodeKind, Point, DelayPairGroup};
+use crate::layout::ports::{dual_inlet_node_width, dual_inlet_node_x, outlet_world_x, port_x_offset};
 
 /// Sorting-mode layout: place nodes on a regular grid and maximise straight vertical
 /// patch cables (outlet X == inlet X on every edge).
@@ -52,7 +52,11 @@ fn straight_wire_layout(graph: &LayoutGraph, config: &LayoutConfig) -> LayoutRes
         offset_x += config.snap(max_x - min_x + config.column_gap());
     }
 
-    LayoutResult { positions, sizes }
+    LayoutResult {
+        positions,
+        sizes,
+        ..Default::default()
+    }
 }
 
 /// Grid-snapped horizontal stride between parallel spine columns.
@@ -1379,7 +1383,7 @@ fn port_aligned_head_x(
     graph: &LayoutGraph,
     units: &UnitLayout,
     positions: &HashMap<LayoutNodeId, Point>,
-    unit: &crate::blocks::LayoutUnit,
+    unit: &crate::layout::blocks::LayoutUnit,
     edges: &[&LayoutEdge],
 ) -> Option<f32> {
     let head = unit.head();
@@ -1397,7 +1401,7 @@ fn port_aligned_head_x(
             parent.outlets,
         );
         let child_in_off =
-            crate::ports::port_x_offset(head_node.size.0, edge.to_port, head_node.inlets.max(1));
+            crate::layout::ports::port_x_offset(head_node.size.0, edge.to_port, head_node.inlets.max(1));
         desired_x.push(parent_out_x - child_in_off);
     }
     if desired_x.is_empty() {
@@ -1490,7 +1494,7 @@ fn node_rect(
 
 fn unit_bbox(
     graph: &LayoutGraph,
-    unit: &crate::blocks::LayoutUnit,
+    unit: &crate::layout::blocks::LayoutUnit,
     positions: &HashMap<LayoutNodeId, Point>,
     sizes: Option<&HashMap<LayoutNodeId, (f32, f32)>>,
 ) -> NodeRect {
@@ -1726,8 +1730,8 @@ fn normalize_unit_ranks(ranks: &mut [u32]) {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::graph::{LayoutGraph, LayoutNode};
-    use crate::ports::{inlet_world_x, outlet_world_x};
+    use crate::layout::layout_graph::{LayoutGraph, LayoutNode};
+    use crate::layout::ports::{inlet_world_x, outlet_world_x};
 
     #[test]
     fn spine_roots_and_rows_snap_to_grid() {
@@ -2205,7 +2209,7 @@ mod tests {
 }
 
 fn assert_straight_wires(graph: &LayoutGraph, result: &LayoutResult) {
-    use crate::ports::inlet_world_x;
+    use crate::layout::ports::inlet_world_x;
 
     for edge in graph.edges() {
         let from = graph.node(edge.from).unwrap();

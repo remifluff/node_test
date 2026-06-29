@@ -1,15 +1,11 @@
 #![warn(clippy::all, rust_2018_idioms)]
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
-mod graph;
-mod layout_adapter;
-mod node_autocomplete;
-mod operator_library;
-mod patch_export;
-mod style;
+mod app;
 
 use eframe::egui;
-use graph::PdPatchEditor;
+use app::PdPatchEditor;
+use mouse_ui::style;
 
 fn main() -> eframe::Result {
     env_logger::init();

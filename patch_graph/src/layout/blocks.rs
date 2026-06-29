@@ -1,6 +1,6 @@
 use std::collections::{HashMap, HashSet};
 
-use crate::graph::{LayoutEdge, LayoutGraph, LayoutNode, LayoutNodeId};
+use crate::layout::layout_graph::{LayoutEdge, LayoutGraph, LayoutNode, LayoutNodeId};
 
 /// Two passthrough columns feeding a dual-inlet combiner, placed side by side.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -293,7 +293,7 @@ pub fn translate_unit(
     unit: &LayoutUnit,
     dx: f32,
     dy: f32,
-    positions: &mut HashMap<LayoutNodeId, crate::graph::Point>,
+    positions: &mut HashMap<LayoutNodeId, crate::layout::layout_graph::Point>,
 ) {
     if dx.abs() < f32::EPSILON && dy.abs() < f32::EPSILON {
         return;
@@ -332,9 +332,9 @@ pub fn unit_span_width(
 pub fn place_unit(
     graph: &LayoutGraph,
     unit: &LayoutUnit,
-    anchor: crate::graph::Point,
+    anchor: crate::layout::layout_graph::Point,
     row_gap: f32,
-    positions: &mut HashMap<LayoutNodeId, crate::graph::Point>,
+    positions: &mut HashMap<LayoutNodeId, crate::layout::layout_graph::Point>,
 ) {
     if unit.dual_inlet {
         positions.insert(unit.primary(), anchor);
@@ -350,7 +350,7 @@ pub fn place_unit(
     // Vertical column: nodes stacked top-to-bottom at the same port X.
     let mut y = anchor.y;
     for &id in &unit.nodes {
-        positions.insert(id, crate::graph::Point { x: anchor.x, y });
+        positions.insert(id, crate::layout::layout_graph::Point { x: anchor.x, y });
         y += node_layout_height(graph, id) + row_gap;
     }
 }
@@ -358,7 +358,7 @@ pub fn place_unit(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::graph::{LayoutGraph, LayoutNode, NodeKind};
+    use crate::layout::layout_graph::{LayoutGraph, LayoutNode, NodeKind};
 
     fn incoming(graph: &LayoutGraph) -> HashMap<LayoutNodeId, Vec<&LayoutEdge>> {
         let mut map: HashMap<LayoutNodeId, Vec<&LayoutEdge>> = HashMap::new();

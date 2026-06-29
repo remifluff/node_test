@@ -1,13 +1,15 @@
 # node_test
 
-Pd-style patch editor built with [egui](https://github.com/emilk/egui) / [eframe](https://github.com/emilk/egui/tree/master/crates/eframe), plus a UI-agnostic automatic layout library for directed acyclic patch graphs.
+Pd-style patch editor built with [egui](https://github.com/emilk/egui) / [eframe](https://github.com/emilk/egui/tree/master/crates/eframe).
 
-## Crates
+## Workspace
 
 | Crate | Role |
 |-------|------|
-| `node_test` | Desktop app (`pd_editor` binary) — graph editing, rendering, patch export |
-| `patch_layout` | Layout engine — ranks and positions nodes without changing topology |
+| `patch_graph` | Node graph domain model, `.lop` export, and automatic layout (merged from the old `patch_layout` crate) |
+| `mouse_ui` | Shared canvas, styling, and mouse-driven node widgets |
+| `keyboard_ui` | Sorted-layout pane with arrow-key navigation |
+| `node_test` (`pd_editor` binary) | App shell composing the two UI panes |
 
 ## Run
 
@@ -15,12 +17,11 @@ Pd-style patch editor built with [egui](https://github.com/emilk/egui) / [eframe
 cargo run --bin pd_editor
 ```
 
-## Layout
-
-`patch_layout` converts a patch graph into coordinates only. See [`patch_layout/PLAN.md`](patch_layout/PLAN.md) for the design.
+## Tests
 
 ```sh
-cargo test -p patch_layout
+cargo test -p patch_graph   # layout engine
+cargo test                   # editor integration tests
 ```
 
 ## License

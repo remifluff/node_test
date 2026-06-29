@@ -1,21 +1,25 @@
-//! Converts between the editor's `PatchGraph` and `patch_layout::LayoutGraph`.
+//! Converts between the editor's `PatchGraph` and the layout engine's `LayoutGraph`.
 
 use std::collections::HashMap;
 use std::hash::{Hash, Hasher};
 
+use emath::{Pos2, Vec2};
 use petgraph::graph::NodeIndex;
-use eframe::egui::Vec2;
-use patch_layout::{
-    LayoutConfig, LayoutEdge, LayoutGraph, LayoutNode, LayoutResult, NodeKind, Point,
-    layout_patch,
-};
 
-use crate::graph::{EdgeData, Node, PatchGraph, PdObject};
+use crate::graph::PatchGraph;
+use crate::node::{EdgeData, Node};
+use crate::object::PdObject;
+use crate::layout::{
+    layout_patch, LayoutConfig, LayoutEdge, LayoutGraph, LayoutNavCell, LayoutNode, LayoutResult,
+    NodeKind, Point,
+};
 
 #[derive(Clone, Default)]
 pub struct LayoutPreview {
-    pub positions: HashMap<usize, eframe::egui::Pos2>,
+    pub positions: HashMap<usize, Pos2>,
     pub sizes: HashMap<usize, Vec2>,
+    pub nav: HashMap<usize, LayoutNavCell>,
+    pub rows: Vec<Vec<usize>>,
 }
 
 pub fn patch_to_layout(graph: &PatchGraph) -> LayoutGraph {
@@ -80,13 +84,15 @@ fn layout_result_to_preview(result: LayoutResult) -> LayoutPreview {
         positions: result
             .positions
             .into_iter()
-            .map(|(id, point)| (id, eframe::egui::pos2(point.x, point.y)))
+            .map(|(id, point)| (id, Pos2::new(point.x, point.y)))
             .collect(),
         sizes: result
             .sizes
             .into_iter()
-            .map(|(id, (w, h))| (id, eframe::egui::vec2(w, h)))
+            .map(|(id, (w, h))| (id, Vec2::new(w, h)))
             .collect(),
+        nav: result.nav,
+        rows: result.rows,
     }
 }
 
@@ -96,11 +102,6 @@ pub fn layout_preview(graph: &PatchGraph) -> LayoutPreview {
     layout_result_to_preview(result)
 }
 
-pub fn layout_preview_positions(graph: &PatchGraph) -> HashMap<usize, eframe::egui::Pos2> {
-    layout_preview(graph).positions
-}
-
-/// Returns cached organized layout; recomputes only when topology changes.
 pub fn layout_preview_cached<'a>(
     graph: &PatchGraph,
     cache: &'a mut Option<(u64, LayoutPreview)>,
@@ -116,13 +117,13 @@ pub fn apply_layout_to_patch(graph: &mut PatchGraph, result: &LayoutResult) {
     for (id, point) in &result.positions {
         let node_id = NodeIndex::new(*id);
         if let Some(node) = graph.node_weight_mut(node_id) {
-            node.pos = eframe::egui::pos2(point.x, point.y);
+            node.pos = Pos2::new(point.x, point.y);
         }
     }
     for (id, (w, h)) in &result.sizes {
         let node_id = NodeIndex::new(*id);
         if let Some(node) = graph.node_weight_mut(node_id) {
-            node.size = eframe::egui::vec2(*w, *h);
+            node.size = Vec2::new(*w, *h);
         }
     }
 }

@@ -8,10 +8,10 @@ use petgraph::graph::DiGraph;
 use rust_sugiyama::configure::{Config as SugiyamaConfig, CrossingMinimization, RankingType};
 use rust_sugiyama::from_vertices_and_edges;
 
-use crate::blocks::is_dual_inlet_combiner;
-use crate::config::{FlowDirection, LayoutConfig};
-use crate::graph::{LayoutEdge, LayoutGraph, LayoutNodeId, LayoutResult, Point};
-use crate::ports::{dual_inlet_node_width, dual_inlet_node_x, outlet_world_x, port_x_offset};
+use crate::layout::blocks::is_dual_inlet_combiner;
+use crate::layout::config::{FlowDirection, LayoutConfig};
+use crate::layout::layout_graph::{LayoutEdge, LayoutGraph, LayoutNodeId, LayoutResult, Point};
+use crate::layout::ports::{dual_inlet_node_width, dual_inlet_node_x, outlet_world_x, port_x_offset};
 
 #[derive(Clone, Copy, Debug, Default)]
 pub struct SugiyamaLayout;
@@ -83,7 +83,11 @@ impl SugiyamaLayout {
             component_offset.y = config.origin.y;
         }
 
-        LayoutResult { positions, sizes }
+        LayoutResult {
+            positions,
+            sizes,
+            ..Default::default()
+        }
     }
 }
 
@@ -383,8 +387,8 @@ fn align_ports_in_component(
     }
 }
 
-fn build_incoming(graph: &LayoutGraph) -> HashMap<LayoutNodeId, Vec<&crate::graph::LayoutEdge>> {
-    let mut incoming: HashMap<LayoutNodeId, Vec<&crate::graph::LayoutEdge>> = HashMap::new();
+fn build_incoming(graph: &LayoutGraph) -> HashMap<LayoutNodeId, Vec<&crate::layout::layout_graph::LayoutEdge>> {
+    let mut incoming: HashMap<LayoutNodeId, Vec<&crate::layout::layout_graph::LayoutEdge>> = HashMap::new();
     for edge in graph.edges() {
         incoming.entry(edge.to).or_default().push(edge);
     }
@@ -412,8 +416,8 @@ fn topo_sort_nodes(graph: &LayoutGraph) -> Vec<LayoutNodeId> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::graph::{LayoutEdge, LayoutGraph, LayoutNode, NodeKind};
-    use crate::ports::{inlet_world_x, outlet_world_x};
+    use crate::layout::layout_graph::{LayoutEdge, LayoutGraph, LayoutNode, NodeKind};
+    use crate::layout::ports::{inlet_world_x, outlet_world_x};
 
     #[test]
     fn chain_ports_share_x_after_alignment() {

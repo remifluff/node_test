@@ -1,21 +1,23 @@
 //! Automatic spatial layout for directed acyclic patch graphs.
-//!
-//! See [`PLAN.md`](../PLAN.md) for the full design.
 
 mod blocks;
 mod config;
-mod graph;
+mod layout_graph;
 mod layered;
+mod nav;
 mod ports;
 mod sugiyama;
 
 pub use blocks::{build_unit_layout, is_passthrough, FanInPair, LayoutUnit, UnitLayout};
-
 pub use config::{FlowDirection, LayoutConfig};
-pub use graph::{LayoutEdge, LayoutGraph, LayoutNode, LayoutResult, NodeKind, Point};
+pub use layout_graph::{
+    LayoutEdge, LayoutGraph, LayoutNavCell, LayoutNode, LayoutResult, NodeKind, Point,
+};
 pub use layered::LayeredDagLayout;
+pub use ports::{
+    dual_inlet_node_width, dual_inlet_node_x, inlet_world_x, outlet_world_x, port_x_offset,
+};
 pub use sugiyama::SugiyamaLayout;
-pub use ports::{dual_inlet_node_width, dual_inlet_node_x, inlet_world_x, outlet_world_x, port_x_offset};
 
 /// Layout engine trait — additional algorithms implement this.
 pub trait LayoutEngine {
@@ -36,7 +38,11 @@ impl LayoutEngine for SugiyamaLayout {
 
 /// Convenience entry point using the Sugiyama layered layout engine.
 pub fn layout_patch(graph: &LayoutGraph, config: &LayoutConfig) -> LayoutResult {
-    SugiyamaLayout.layout(graph, config)
+    let mut result = SugiyamaLayout.layout(graph, config);
+    let (nav, rows) = nav::build_nav_grid(&result.positions);
+    result.nav = nav;
+    result.rows = rows;
+    result
 }
 
 /// Apply computed positions and resized dimensions back into node records.
@@ -56,7 +62,7 @@ pub fn apply_positions(graph: &mut LayoutGraph, result: &LayoutResult) {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use graph::LayoutNode;
+    use layout_graph::LayoutNode;
 
     fn demo_graph() -> LayoutGraph {
         let mut g = LayoutGraph::new();

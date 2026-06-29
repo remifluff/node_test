@@ -104,11 +104,23 @@ impl LayoutEdge {
     }
 }
 
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct LayoutNavCell {
+    /// Layer index: 0 = top row (near sources).
+    pub row: u32,
+    /// Left-to-right index within the row.
+    pub slot: u32,
+}
+
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct LayoutResult {
     pub positions: HashMap<LayoutNodeId, Point>,
     /// Resized node dimensions (e.g. stretched combine boxes for straight inlet wires).
     pub sizes: HashMap<LayoutNodeId, (f32, f32)>,
+    /// Keyboard-navigation cell for each laid-out node.
+    pub nav: HashMap<LayoutNodeId, LayoutNavCell>,
+    /// Row index → node ids sorted left-to-right by layout X.
+    pub rows: Vec<Vec<LayoutNodeId>>,
 }
 
 /// Topology + sizes for layout. Positions on input are ignored unless

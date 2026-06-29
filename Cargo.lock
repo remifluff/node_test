@@ -1752,6 +1752,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "keyboard_ui"
+version = "0.1.0"
+dependencies = [
+ "eframe",
+ "egui",
+ "mouse_ui",
+ "patch_graph",
+ "petgraph",
+]
+
+[[package]]
 name = "khronos-egl"
 version = "6.0.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1894,6 +1905,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "mouse_ui"
+version = "0.1.0"
+dependencies = [
+ "eframe",
+ "egui",
+ "log",
+ "patch_graph",
+ "petgraph",
+]
+
+[[package]]
 name = "moxcms"
 version = "0.8.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1966,8 +1988,10 @@ dependencies = [
  "eframe",
  "egui",
  "env_logger",
+ "keyboard_ui",
  "log",
- "patch_layout",
+ "mouse_ui",
+ "patch_graph",
  "petgraph",
 ]
 
@@ -2398,9 +2422,10 @@ dependencies = [
 ]
 
 [[package]]
-name = "patch_layout"
+name = "patch_graph"
 version = "0.1.0"
 dependencies = [
+ "emath",
  "petgraph",
  "rust-sugiyama",
 ]

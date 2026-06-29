@@ -1,0 +1,237 @@
+operator list
+
+    pd
+osc~ - Pd audio oscillator
++~ - Pd audio add
+*~ - Pd audio multiply
+dac~ - Pd audio output
+metro - Pd metronome
+random - Pd random integer
+delay_in - Pd delay inlet pair
+delay_out - Pd delay outlet pair
+send - Pd send symbol
+receive - Pd receive symbol
+combine - Pd dual-inlet combiner
+
+    color
+hsl2rgb - Convert HSL to RGB
+rgb2hsl - Convert RGB to HSL
+
+    comparison
+!= - Not equal operator
+!=p - Not equal/pass operator
+< - Less than operator
+<= - Less than or equals operator
+<=p - Pass less than or equals operator
+<p - Pass less than operator
+== - Equal operator
+==p - Equal/pass operator
+› - Greater than operator
+›= - Greater than or equals operator
+›=p - Pass greater than or equals operator
+›p - Pass greater than operator eq - Equal operator
+eap - Equal/pass operator
+gt - Greater than operator
+gte - Greater than or equals operator
+gtep - Pass greater than or equals operator gp - Pass greater than operator
+It - Less than operator
+Ite - Less than or equals operator
+Itep - Pass less than or equals operator
+Itp - Pass less than operator
+max - The maximum of the inputs
+maximum - The maximum of the inputs
+min- The minimum of the inputs
+minimum - The minimum of the inputs
+neq - Not equal operator
+neap - Not equal/pass operator
+step - Returns not(in1 < in2)
+
+    constant
+constant - A constant value
+degtorad - The constant value of degtorad
+DEGTORAD - The constant value of degtorad
+e - The constant value of e
+E - The constant value of e
+f- constant float / convert to float
+float - constant float / convert to float
+halfpi - The constant value of halfpi
+HALFPI - The constant value of halfpi
+i - constant integer / convert to integer
+int - constant integer / convert to integer
+invpi - The constant value of invpi
+INVPI - The constant value of invpi
+In10 - The constant value of In10
+LN10 - The constant value of In10
+In2 - The constant value of In2
+LN2 - The constant value of In2
+log10e - The constant value of log 10e
+LOG10E - The constant value of log10e
+log2e - The constant value of log2e
+LOGE - The constant value of log2e
+phi - The constant value of phi
+PHI - The constant value of phi
+pi - The constant value of pi
+PI - The constant value of pi
+radtodeg - The constant value of radtodeg
+RADTODEG - The constant value of radtodeg
+sqrt1_2 - The constant value of sqrt1_2
+SQRT1_2 - The constant value of sqrt1_2
+sqrt2 - The constant value of sqrt2
+SQRT2 - The constant value of sqrt2
+twopi - The constant value of twopi
+TWOPI - The constant value of twopi
+
+    coordinate
+cell - Cell coordinates of input matrix (not supported for textures)
+dim - Dimensions of input matrix
+norm - Normalized coordinates of input matrix
+snorm - Signed normalized coordinates of input matrix
+
+    declare
+param - An externally modifiable, named parameter 
+Param - An externally modifiable, named parameter
+
+    expression
+expr - An expression
+
+    ignore
+pass - Passes the value through unchanged
+
+    input-output
+in - Gen patcher input
+out - Send output from a gen patcher
+logic
+! - logical negation operator
+&& - Logical and operator
+A^ - Logical xor operator
+Il - Logical or operator
+and - Logical and operator
+bool - constant boolean / convert to boolean
+not - logical negation operator
+or - Logical or operator
+xor - Logical xor operator
+
+    math
+- - Subtract inputs
+!- - Reverse subtraction (subtract first input from second)
+!/ - Reverse division (divide second input by first)
+1% - Reverse modulo (remainder of second input / first input)
+* - Multiply inputs
+/ - Divide inputs
+% - Modulo inputs (remainder of first input / second input)
++ - Add inputs
+absdiff - Compute the absolute difference between two inputs
+add - Add inputs
+cartopol - Convert Cartesian values to polar
+div - Divide inputs
+mod - Modulo inputs (remainder of first input / second input)
+mul - Multiply inputs
+neg - Negate input
+poltocar - Convert polar values to Cartesian
+rdiv - Reverse division (divide second input by first)
+rmod - Reverse modulo (remainder of second input / first input)
+rsub - Reverse subtraction (subtract first input from second)
+sub - Subtract inputs
+
+
+    numeric
+abs - The absolute value of the input
+ceil - Round the value up to the next higher integer
+floor - Round the value down to the next lower integer (toward negative infinity)
+fract - Return only the fractional component
+sign - Return the sign of the input
+trunc - Round the value down to the next smaller integer (toward zero)
+
+    powers
+exp - Raise the mathematical value e to a power
+exp2 - Raise 2 to a power fastexp - Approximated e to a power (dosent work)
+fastpow - Approximated in1 to the power of in2
+ln - The natural logarithm
+log - The natural logarithm
+log10 - The logarithm base 10 of the input
+log2 - The logarithm base 2 of the input
+pow - Raise in1 to the power of in2
+sqrt - The square root of the input
+
+    quaternion
+qconj - Get the conjugate of a quaternion.
+qmul - Multiply quaternion inputs
+qrot - Rotate a vector by a quaternion
+
+    range
+clamp - Clamp values in a specified range
+clip - Clamp values in a specified range
+fold - Fold input to a range within a low and high output value
+scale - Map an input range of values to an output range
+wrap - Wrap input to a range within a low and high output value
+
+    route
+? - Conditional ternary operator
+gate - Select between a number of outputs
+mix - Linear crossfade of inputs
+r - Receive values from a named send.
+receive - Receive values from a named send.
+s - Send values to a named receive.
+selector - Select between a number of inputs
+send - Send values to a named receive.
+smoothstep - Smoothed fade of inputs
+switch - Conditional ternary operator
+
+    sampling
+nearest - Nearest neighbor sample a matrix
+nearestpix - Nearest neighbor sample a matrix (not supported for textures)
+sample - Sample a matrix
+samplepix - Sample a matrix (not supported for textures)
+    
+    subpatcher
+gen - Gen subpatcher
+setparam - Set a subpatcher param
+
+
+    surface
+circle - Equation of a circle taking input coordinates ranging from [0, 1]
+cone - Equation of a cone taking input coordinates ranging from [0, 1]
+cylinder - Equation of a cylinder taking input coordinates ranging from [0, 1] plane - Equation of a plane taking input coordinates ranging from [0, 1] sphere - Equation of a sphere taking input coordinates ranging from [0, 1]
+torus - Equation of a torus taking input coordinates ranging from [0, 1]
+
+
+    trigonometry
+acos - The arc cosine of the input (returns radians)
+acosh - The inverse hyperbolic cosine of the input
+asin - The arc sine of the input (returns radians)
+asinh - The inverse hyperbolic sine of the input
+atan - The arc tangent of the input (returns radians)
+atan2 - The arctangent of the input coordinate
+atanh - The inverse hyperbolic tangent of the input
+cos - The cosine of the input (in radians)
+cosh - The hyperbolic cosine of the input
+degrees - convert radians to degrees
+fastcos - The approximated cosine of the input (in radians)
+fastsin - The approximated sine of the input (in radians)
+fasttan - The approximated tangent of the input (in radians)
+hypot - The hypoteneuse
+radians - convert degrees to radians
+sin - The sine of the input (in radians)
+sinh - The hyperbolic sine of the input
+tan - The tangent of the input (in radians)
+tanh - The hyperbolic tangent of the input
+
+    ui 
+comment - Add notes to gen patch (no effect on rendering pipeline)
+panel - Add visual panels to gen patch (no effect on rendering pipeline)
+
+    vector
+concat - Concatenate vector values into a larger vector
+cross - Take the cross product of two vectors
+dot - Take the dot product of two vectors
+faceforward - Return a vector pointing in the same direction as another
+length - Returns the length of a vector
+normalize - Normalize a vector to unit length
+reflect - Reflect a vector
+refract - Refract a vector
+rotor - Return a quaternion that can rotate the first input into the second
+swiz - Unpack and remap vector components
+vec - Pack scalar values into a vector
+
+    waveform
+noise - A random number generator (not supported for textures)
