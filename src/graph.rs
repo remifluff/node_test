@@ -1,7 +1,7 @@
 use eframe::egui::{
     self, emath::TSTransform, pos2, vec2, Area, Color32, Context, CornerRadius, CursorIcon,
-    DragPanButtons, Frame, Id, Key, LayerId, Order, PointerButton, Pos2, Rangef, Rect, RichText,
-    Scene, Sense, Ui, Vec2,
+    Frame, Id, InnerResponse, Key, LayerId, Order, PointerButton, Pos2, Rangef, Rect, RichText,
+    Sense, Ui, UiBuilder, Vec2,
 };
 use eframe::egui::{epaint::CubicBezierShape, epaint::Shape, pos2 as egui_pos2};
 use eframe::egui::Stroke;
@@ -377,13 +377,52 @@ impl CanvasView {
     }
 }
 
-fn patch_scene() -> Scene {
-    Scene::new()
-        .zoom_range(Rangef::new(CanvasView::MIN_ZOOM, CanvasView::MAX_ZOOM))
-        .drag_pan_buttons(DragPanButtons::MIDDLE)
-        .max_inner_size(Vec2::splat(SCENE_MAX_SIZE))
-        // Pan/zoom is handled at the canvas level so nodes on higher layers don't block it.
-        .sense(Sense::empty())
+/// Show the patch canvas scene without egui [`Scene`]'s built-in pan/zoom (we handle that
+/// separately so scroll works over nodes and is not applied twice on the background).
+fn show_patch_scene<R>(
+    ui: &mut Ui,
+    scene_rect: &mut Rect,
+    add_contents: impl FnOnce(&mut Ui) -> R,
+) -> InnerResponse<R> {
+    let zoom_range = Rangef::new(CanvasView::MIN_ZOOM, CanvasView::MAX_ZOOM);
+    let max_inner_size = Vec2::splat(SCENE_MAX_SIZE);
+
+    let (outer_rect, _) =
+        ui.allocate_exact_size(ui.available_size_before_wrap(), Sense::hover());
+    apply_canvas_navigation(ui, outer_rect, scene_rect);
+
+    let mut to_global = fit_scene_to_view(outer_rect, *scene_rect, zoom_range);
+    let scene_rect_was_good =
+        to_global.is_valid() && scene_rect.is_finite() && scene_rect.size() != Vec2::ZERO;
+
+    let scene_layer_id = LayerId::new(ui.layer_id().order, ui.id().with("scene_area"));
+    ui.ctx().set_sublayer(ui.layer_id(), scene_layer_id);
+
+    let mut local_ui = ui.new_child(
+        UiBuilder::new()
+            .layer_id(scene_layer_id)
+            .max_rect(Rect::from_min_size(Pos2::ZERO, max_inner_size))
+            .sense(Sense::empty()),
+    );
+
+    let pan_response = local_ui.response();
+    local_ui.set_clip_rect(to_global.inverse() * outer_rect);
+    local_ui
+        .ctx()
+        .set_transform_layer(scene_layer_id, to_global);
+
+    let inner = add_contents(&mut local_ui);
+
+    if !scene_rect_was_good {
+        let inner_rect = local_ui.min_rect();
+        to_global = fit_scene_to_view(outer_rect, inner_rect, zoom_range);
+        *scene_rect = to_global.inverse() * outer_rect;
+    }
+
+    InnerResponse {
+        response: pan_response,
+        inner,
+    }
 }
 
 /// Match [`Scene`]'s fit transform (scene coords → screen).
@@ -2064,8 +2103,6 @@ impl PdPatchEditor {
         if !scene_rect.is_positive() {
             scene_rect = self.default_scene_view_rect();
         }
-        let view_rect = ui.available_rect_before_wrap();
-        apply_canvas_navigation(ui, view_rect, &mut scene_rect);
 
         let parent_id = ui.id();
         let parent_order = ui.layer_id().order;
@@ -2076,7 +2113,7 @@ impl PdPatchEditor {
             world_clip: Rect::NOTHING,
         };
 
-        let scene_response = patch_scene().show(ui, &mut scene_rect, |scene_ui| {
+        let scene_response = show_patch_scene(ui, &mut scene_rect, |scene_ui| {
             let ctx = scene_ui.ctx().clone();
             let scene_layer = scene_layer_id(parent_id, parent_order);
             let transform = scene_transform(&ctx, parent_id, parent_order);
@@ -2151,13 +2188,11 @@ impl PdPatchEditor {
         if !scene_rect.is_positive() {
             scene_rect = self.default_scene_view_rect();
         }
-        let view_rect = ui.available_rect_before_wrap();
-        apply_canvas_navigation(ui, view_rect, &mut scene_rect);
 
         let parent_id = ui.id();
         let parent_order = ui.layer_id().order;
 
-        patch_scene().show(ui, &mut scene_rect, |scene_ui| {
+        show_patch_scene(ui, &mut scene_rect, |scene_ui| {
             let ctx = scene_ui.ctx().clone();
             let scene_layer = scene_layer_id(parent_id, parent_order);
             let transform = scene_transform(&ctx, parent_id, parent_order);
