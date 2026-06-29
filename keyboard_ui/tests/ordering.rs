@@ -1,7 +1,14 @@
 use egui::{pos2, vec2, Rect};
-use patch_graph::{layout::LayoutNavCell, layout_adapter::LayoutPreview, node::Node, object::PdObject, PatchGraph};
+use patch_graph::{
+    layout::LayoutNavCell, layout_adapter::LayoutPreview, node::Node, object::PdObject, PatchGraph,
+};
 
-fn make_graph() -> (patch_graph::NodeId, patch_graph::NodeId, patch_graph::NodeId, PatchGraph) {
+fn make_graph() -> (
+    patch_graph::NodeId,
+    patch_graph::NodeId,
+    patch_graph::NodeId,
+    PatchGraph,
+) {
     let mut graph = PatchGraph::default();
     let a = graph.add_node(Node {
         object: PdObject::In,
@@ -42,8 +49,24 @@ fn make_graph() -> (patch_graph::NodeId, patch_graph::NodeId, patch_graph::NodeI
         outlet_positions: vec![],
         selected: false,
     });
-    graph.add_edge(a, b, patch_graph::node::EdgeData { from_port: 0, to_port: 0, selected: false });
-    graph.add_edge(b, c, patch_graph::node::EdgeData { from_port: 0, to_port: 0, selected: false });
+    graph.add_edge(
+        a,
+        b,
+        patch_graph::node::EdgeData {
+            from_port: 0,
+            to_port: 0,
+            selected: false,
+        },
+    );
+    graph.add_edge(
+        b,
+        c,
+        patch_graph::node::EdgeData {
+            from_port: 0,
+            to_port: 0,
+            selected: false,
+        },
+    );
     (a, b, c, graph)
 }
 

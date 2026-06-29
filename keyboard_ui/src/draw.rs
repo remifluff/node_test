@@ -2,7 +2,9 @@
 
 use std::collections::HashMap;
 
-use eframe::egui::{self, pos2, vec2, Color32, CornerRadius, Id, Order, Pos2, Rect, Stroke, Ui, Vec2};
+use eframe::egui::{
+    self, pos2, vec2, Color32, CornerRadius, Id, Order, Pos2, Rect, Stroke, Ui, Vec2,
+};
 use patch_graph::{LayoutPreview, Node, NodeId, PatchGraph};
 
 use mouse_ui::canvas::{scene_layer_id, scene_transform};
@@ -42,22 +44,14 @@ fn node_visible_in_scene(world_clip: Rect, world_rect: Rect) -> bool {
     world_rect.is_positive() && world_clip.intersects(world_rect)
 }
 
-fn world_pos_for_node(
-    graph: &PatchGraph,
-    node_id: NodeId,
-    preview: &LayoutPreview,
-) -> Pos2 {
+fn world_pos_for_node(graph: &PatchGraph, node_id: NodeId, preview: &LayoutPreview) -> Pos2 {
     if let Some(pos) = preview.positions.get(&node_id.index()) {
         return *pos;
     }
     graph[node_id].pos
 }
 
-fn node_size_for_preview(
-    graph: &PatchGraph,
-    node_id: NodeId,
-    preview: &LayoutPreview,
-) -> Vec2 {
+fn node_size_for_preview(graph: &PatchGraph, node_id: NodeId, preview: &LayoutPreview) -> Vec2 {
     if let Some(size) = preview.sizes.get(&node_id.index()) {
         return *size;
     }
@@ -127,14 +121,18 @@ pub fn node_order_for_paint(graph: &PatchGraph, preview: &LayoutPreview) -> Vec<
             return a_is_comment.cmp(&b_is_comment);
         }
 
-        let a_key = row_slots
-            .get(&a.index())
-            .copied()
-            .or_else(|| preview.nav.get(&a.index()).map(|cell| (cell.row as usize, cell.slot as usize)));
-        let b_key = row_slots
-            .get(&b.index())
-            .copied()
-            .or_else(|| preview.nav.get(&b.index()).map(|cell| (cell.row as usize, cell.slot as usize)));
+        let a_key = row_slots.get(&a.index()).copied().or_else(|| {
+            preview
+                .nav
+                .get(&a.index())
+                .map(|cell| (cell.row as usize, cell.slot as usize))
+        });
+        let b_key = row_slots.get(&b.index()).copied().or_else(|| {
+            preview
+                .nav
+                .get(&b.index())
+                .map(|cell| (cell.row as usize, cell.slot as usize))
+        });
         match (a_key, b_key) {
             (Some(a_cell), Some(b_cell)) => a_cell
                 .0
@@ -256,7 +254,12 @@ fn paint_ports(
     }
 }
 
-fn draw_patch_border(graph: &PatchGraph, painter: &egui::Painter, world_clip: Rect, preview: &LayoutPreview) {
+fn draw_patch_border(
+    graph: &PatchGraph,
+    painter: &egui::Painter,
+    world_clip: Rect,
+    preview: &LayoutPreview,
+) {
     let mut bounds = Rect::NOTHING;
     let mut any = false;
     for node_id in graph.node_indices() {
