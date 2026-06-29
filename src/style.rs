@@ -81,6 +81,26 @@ pub fn node_frame(selected: bool, is_comment: bool) -> egui::Frame {
     }
 }
 
+pub fn node_edit_frame(is_comment: bool) -> egui::Frame {
+    if is_comment {
+        return egui::Frame {
+            fill: PAPER,
+            stroke: Stroke::NONE,
+            inner_margin: Margin::symmetric(2, 1),
+            corner_radius: CornerRadius::ZERO,
+            ..Default::default()
+        };
+    }
+
+    egui::Frame {
+        fill: PAPER,
+        stroke: Stroke::new(LINE_W, PAPER),
+        inner_margin: Margin::symmetric(END_CAP_W as i8, 2),
+        corner_radius: CornerRadius::ZERO,
+        ..Default::default()
+    }
+}
+
 pub fn port_size(zoom: f32) -> f32 {
     (PORT_R * PORT_SIZE_FACTOR * zoom).max(2.0)
 }
@@ -200,9 +220,28 @@ pub fn port_position(node_rect: egui::Rect, index: usize, count: usize, is_outle
     port_position_t(node_rect, t, is_outlet, zoom)
 }
 
-pub fn paint_port_square(painter: &egui::Painter, center: egui::Pos2, selected: bool, zoom: f32) {
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub enum PortHighlight {
+    None,
+    Hovered,
+    Connecting,
+    ConnectTarget,
+}
+
+pub fn paint_port_square(
+    painter: &egui::Painter,
+    center: egui::Pos2,
+    selected: bool,
+    highlight: PortHighlight,
+    zoom: f32,
+) {
     let size = port_size(zoom);
-    let fill = if selected { INK } else { PAPER };
+    let fill = match highlight {
+        PortHighlight::ConnectTarget | PortHighlight::Connecting => WIRE_HANDLE_HOVER,
+        PortHighlight::Hovered => WIRE_HANDLE,
+        PortHighlight::None if selected => INK,
+        PortHighlight::None => PAPER,
+    };
     painter.rect_filled(
         egui::Rect::from_center_size(center, egui::vec2(size, size)),
         0.0,

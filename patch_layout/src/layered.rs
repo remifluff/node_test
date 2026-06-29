@@ -13,7 +13,8 @@ use crate::config::LayoutConfig;
 use crate::graph::{LayoutEdge, LayoutGraph, LayoutNodeId, LayoutResult, NodeKind, Point, DelayPairGroup};
 use crate::ports::{dual_inlet_node_width, dual_inlet_node_x, outlet_world_x, port_x_offset};
 
-/// Layered DAG layout prioritising straight vertical patch cables (aligned port X).
+/// Sorting-mode layout: place nodes on a regular grid and maximise straight vertical
+/// patch cables (outlet X == inlet X on every edge).
 #[derive(Clone, Copy, Debug, Default)]
 pub struct LayeredDagLayout;
 
@@ -48,10 +49,27 @@ fn straight_wire_layout(graph: &LayoutGraph, config: &LayoutConfig) -> LayoutRes
             positions.insert(id, Point { x: point.x + dx, y: point.y });
         }
         sizes.extend(comp_sizes);
-        offset_x += (max_x - min_x) + config.column_gap();
+        offset_x += config.snap(max_x - min_x + config.column_gap());
     }
 
     LayoutResult { positions, sizes }
+}
+
+/// Grid-snapped horizontal stride between parallel spine columns.
+fn component_column_stride(
+    graph: &LayoutGraph,
+    component: &HashSet<LayoutNodeId>,
+    config: &LayoutConfig,
+) -> f32 {
+    let max_w = component
+        .iter()
+        .map(|&id| node_layout_width(graph, id))
+        .fold(0.0f32, f32::max);
+    config.snap(max_w + config.column_gap()).max(config.grid_step)
+}
+
+fn spine_column_x(col: u32, column_stride: f32, config: &LayoutConfig) -> f32 {
+    config.snap(config.origin.x + col as f32 * column_stride)
 }
 
 /// Lay out one weakly connected component (plus delay/send/receive pair links).
@@ -70,6 +88,7 @@ fn layout_component(
     let mut positions: HashMap<LayoutNodeId, Point> = HashMap::new();
     let mut sizes: HashMap<LayoutNodeId, (f32, f32)> = HashMap::new();
     let root_columns = assign_spine_root_columns(graph, &incoming, component);
+    let column_stride = component_column_stride(graph, component, config);
 
     loop {
         let mut progress = false;
@@ -94,6 +113,7 @@ fn layout_component(
                     &sizes,
                     &outgoing,
                     &root_columns,
+                    column_stride,
                     config,
                 ) {
                     continue;
@@ -107,6 +127,7 @@ fn layout_component(
                     &sizes,
                     &outgoing,
                     &root_columns,
+                    column_stride,
                     config,
                 ) {
                     sizes.insert(id, (w, h));
@@ -120,9 +141,8 @@ fn layout_component(
                 if is_combiner_only_feeder(graph, &outgoing, id) {
                     continue;
                 }
-                let w = node_layout_width(graph, id);
                 let col = root_columns.get(&id).copied().unwrap_or(0);
-                let x = config.origin.x + col as f32 * (w + config.column_gap());
+                let x = spine_column_x(col, column_stride, config);
                 positions.insert(id, Point {
                     x,
                     y: config.origin.y,
@@ -138,8 +158,7 @@ fn layout_component(
                     if parent_is_receive(graph, parent) {
                         let receive_h = node_layout_height(graph, parent);
                         let col = root_columns.get(&id).copied().unwrap_or(0);
-                        let w = node_layout_width(graph, id);
-                        let x = config.origin.x + col as f32 * (w + config.column_gap());
+                        let x = spine_column_x(col, column_stride, config);
                         let y = config.origin.y + receive_h + config.row_gap();
                         positions.insert(id, Point { x, y: config.snap(y) });
                         progress = true;
@@ -175,6 +194,7 @@ fn layout_component(
         &mut positions,
         &mut sizes,
         &root_columns,
+        column_stride,
     );
     align_combiner_inlet_feeders(
         graph,
@@ -183,6 +203,7 @@ fn layout_component(
         &incoming,
         &outgoing,
         &root_columns,
+        column_stride,
         &mut positions,
         &mut sizes,
     );
@@ -197,6 +218,7 @@ fn layout_component(
         &mut positions,
         &mut sizes,
         &root_columns,
+        column_stride,
     );
 
     (positions, sizes)
@@ -252,12 +274,13 @@ fn column_outlet_world_x(
     id: LayoutNodeId,
     from_port: usize,
     root_columns: &HashMap<LayoutNodeId, u32>,
+    column_stride: f32,
     config: &LayoutConfig,
 ) -> Option<f32> {
     let node = graph.node(id)?;
     let col = root_columns.get(&id).copied().unwrap_or(0);
     let w = node_layout_width(graph, id);
-    let x = config.origin.x + col as f32 * (w + config.column_gap());
+    let x = spine_column_x(col, column_stride, config);
     Some(outlet_world_x(x, w, from_port, node.outlets.max(1)))
 }
 
@@ -268,6 +291,7 @@ fn parent_outlet_world_x(
     sizes: &HashMap<LayoutNodeId, (f32, f32)>,
     outgoing: &HashMap<LayoutNodeId, Vec<&LayoutEdge>>,
     root_columns: &HashMap<LayoutNodeId, u32>,
+    column_stride: f32,
     config: &LayoutConfig,
 ) -> Option<f32> {
     let parent = edge.from;
@@ -286,7 +310,14 @@ fn parent_outlet_world_x(
         return send_outlet_x_for_hex(graph, hex, positions, sizes);
     }
     if is_combiner_only_feeder(graph, outgoing, parent) {
-        return column_outlet_world_x(graph, parent, edge.from_port, root_columns, config);
+        return column_outlet_world_x(
+            graph,
+            parent,
+            edge.from_port,
+            root_columns,
+            column_stride,
+            config,
+        );
     }
     None
 }
@@ -298,6 +329,7 @@ fn dual_inlet_parents_ready(
     sizes: &HashMap<LayoutNodeId, (f32, f32)>,
     outgoing: &HashMap<LayoutNodeId, Vec<&LayoutEdge>>,
     root_columns: &HashMap<LayoutNodeId, u32>,
+    column_stride: f32,
     config: &LayoutConfig,
 ) -> bool {
     edges_in.iter().all(|edge| {
@@ -308,6 +340,7 @@ fn dual_inlet_parents_ready(
             sizes,
             outgoing,
             root_columns,
+            column_stride,
             config,
         )
         .is_some()
@@ -350,6 +383,7 @@ fn align_combiner_inlet_feeders(
     incoming: &HashMap<LayoutNodeId, Vec<&LayoutEdge>>,
     outgoing: &HashMap<LayoutNodeId, Vec<&LayoutEdge>>,
     root_columns: &HashMap<LayoutNodeId, u32>,
+    column_stride: f32,
     positions: &mut HashMap<LayoutNodeId, Point>,
     sizes: &mut HashMap<LayoutNodeId, (f32, f32)>,
 ) {
@@ -380,6 +414,7 @@ fn align_combiner_inlet_feeders(
             sizes,
             outgoing,
             root_columns,
+            column_stride,
             config,
         ) {
             sizes.insert(combine_id, (w, h));
@@ -399,6 +434,7 @@ fn finish_deferred_placement(
     positions: &mut HashMap<LayoutNodeId, Point>,
     sizes: &mut HashMap<LayoutNodeId, (f32, f32)>,
     root_columns: &HashMap<LayoutNodeId, u32>,
+    column_stride: f32,
 ) {
     loop {
         let mut progress = false;
@@ -420,6 +456,7 @@ fn finish_deferred_placement(
                     sizes,
                     outgoing,
                     root_columns,
+                    column_stride,
                     config,
                 ) {
                     continue;
@@ -436,6 +473,7 @@ fn finish_deferred_placement(
                     sizes,
                     outgoing,
                     root_columns,
+                    column_stride,
                     config,
                 ) {
                     sizes.insert(id, (w, h));
@@ -449,10 +487,12 @@ fn finish_deferred_placement(
                 if is_combiner_only_feeder(graph, outgoing, id) {
                     continue;
                 }
-                let w = node_layout_width(graph, id);
                 let col = root_columns.get(&id).copied().unwrap_or(0);
-                let x = config.origin.x + col as f32 * (w + config.column_gap());
-                positions.insert(id, Point { x, y: config.origin.y });
+                let x = spine_column_x(col, column_stride, config);
+                positions.insert(id, Point {
+                    x,
+                    y: config.origin.y,
+                });
                 progress = true;
                 continue;
             }
@@ -464,8 +504,7 @@ fn finish_deferred_placement(
                     if parent_is_receive(graph, parent) {
                         let receive_h = node_layout_height(graph, parent);
                         let col = root_columns.get(&id).copied().unwrap_or(0);
-                        let w = node_layout_width(graph, id);
-                        let x = config.origin.x + col as f32 * (w + config.column_gap());
+                        let x = spine_column_x(col, column_stride, config);
                         let y = config.origin.y + receive_h + config.row_gap();
                         positions.insert(id, Point { x, y: config.snap(y) });
                         progress = true;
@@ -778,6 +817,7 @@ fn dual_inlet_geometry(
     sizes: &HashMap<LayoutNodeId, (f32, f32)>,
     outgoing: &HashMap<LayoutNodeId, Vec<&LayoutEdge>>,
     root_columns: &HashMap<LayoutNodeId, u32>,
+    column_stride: f32,
     config: &LayoutConfig,
 ) -> Option<(f32, f32, f32)> {
     let node = graph.node(combine_id)?;
@@ -794,6 +834,7 @@ fn dual_inlet_geometry(
             sizes,
             outgoing,
             root_columns,
+            column_stride,
             config,
         ) else {
             return None;
@@ -1034,6 +1075,7 @@ fn compute_unit_anchor(
 
             if unit.dual_inlet {
                 let empty_roots = HashMap::new();
+                let default_stride = config.snap(48.0 + config.column_gap());
                 if let Some((cx, cw, ch)) = dual_inlet_geometry(
                     graph,
                     positions,
@@ -1042,6 +1084,7 @@ fn compute_unit_anchor(
                     sizes,
                     outgoing,
                     &empty_roots,
+                    default_stride,
                     config,
                 ) {
                     sizes.insert(placement_id, (cw, ch));
@@ -1685,6 +1728,38 @@ mod tests {
     use super::*;
     use crate::graph::{LayoutGraph, LayoutNode};
     use crate::ports::{inlet_world_x, outlet_world_x};
+
+    #[test]
+    fn spine_roots_and_rows_snap_to_grid() {
+        let mut g = LayoutGraph::new();
+        let i0 = g.add_node(LayoutNode::new(0, (48.0, 22.0), NodeKind::Source, 0, 1));
+        let i1 = g.add_node(LayoutNode::new(1, (48.0, 22.0), NodeKind::Source, 0, 1));
+        let p1 = g.add_node(LayoutNode::new(2, (56.0, 22.0), NodeKind::Param, 1, 1));
+        let p2 = g.add_node(LayoutNode::new(3, (56.0, 22.0), NodeKind::Param, 1, 1));
+        g.add_edge(LayoutEdge::new(i0, 0, p1, 0));
+        g.add_edge(LayoutEdge::new(i1, 0, p2, 0));
+
+        let config = LayoutConfig::default();
+        let result = layout(&g, &config);
+        let incoming = build_incoming(&g);
+        let roots = assign_spine_root_columns(&g, &incoming, &HashSet::from([i0, i1, p1, p2]));
+
+        for (&id, pos) in &result.positions {
+            assert_eq!(
+                pos.y,
+                config.snap(pos.y),
+                "node {id} Y should sit on the grid"
+            );
+            if roots.contains_key(&id) {
+                assert_eq!(
+                    pos.x,
+                    config.snap(pos.x),
+                    "spine root {id} X should sit on the grid"
+                );
+            }
+        }
+        assert_straight_wires(&g, &result);
+    }
 
     #[test]
     fn chain_ports_share_x() {

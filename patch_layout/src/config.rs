@@ -29,10 +29,10 @@ impl Default for LayoutConfig {
     fn default() -> Self {
         Self {
             column_spacing: 120.0,
-            row_spacing: 80.0,
+            row_spacing: 75.0,
             grid_step: 15.0,
-            origin: Point { x: 80.0, y: 80.0 },
-            flow: FlowDirection::LeftToRight,
+            origin: Point { x: 75.0, y: 75.0 },
+            flow: FlowDirection::TopToBottom,
             pin_sinks_right: true,
             pin_sources_left: true,
             min_column_gap: 30.0,

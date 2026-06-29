@@ -21,6 +21,17 @@ Topology (nodes, edges, ports, object data) is unchanged. The editor converts
 4. **Deterministic** — same graph + config → same layout (seed only for tie-breaks).
 5. **Incremental-ready** — v0 relayouts selection or whole patch; later, pin nodes.
 
+## Sorting mode goals (editor split view)
+
+The organized / **sorted layout** pane runs `patch_layout` on the live graph via
+[`rust-sugiyama`](https://crates.io/crates/rust-sugiyama) (layered Sugiyama layout)
+plus a port-alignment post-pass. Two objectives, in priority order:
+
+1. **Straight vertical cables** — align outlet and inlet X on every edge so patch cords run vertically (not diagonally).
+2. **Grid placement** — snap spine columns and row Y to `grid_step` (15 px, matching the editor). Port-locked child X follows parent alignment rather than forcing wires off-grid.
+
+Disconnected chains land in separate grid columns; dual-inlet combiners stretch horizontally so each inlet meets its feeder outlet.
+
 ## Core types (`graph.rs`)
 
 | Type | Role |

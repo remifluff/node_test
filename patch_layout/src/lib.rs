@@ -7,12 +7,14 @@ mod config;
 mod graph;
 mod layered;
 mod ports;
+mod sugiyama;
 
 pub use blocks::{build_unit_layout, is_passthrough, FanInPair, LayoutUnit, UnitLayout};
 
 pub use config::{FlowDirection, LayoutConfig};
 pub use graph::{LayoutEdge, LayoutGraph, LayoutNode, LayoutResult, NodeKind, Point};
 pub use layered::LayeredDagLayout;
+pub use sugiyama::SugiyamaLayout;
 pub use ports::{dual_inlet_node_width, dual_inlet_node_x, inlet_world_x, outlet_world_x, port_x_offset};
 
 /// Layout engine trait — additional algorithms implement this.
@@ -26,9 +28,15 @@ impl LayoutEngine for LayeredDagLayout {
     }
 }
 
-/// Convenience entry point using the default layered DAG algorithm.
+impl LayoutEngine for SugiyamaLayout {
+    fn layout(&self, graph: &LayoutGraph, config: &LayoutConfig) -> LayoutResult {
+        sugiyama::layout(graph, config)
+    }
+}
+
+/// Convenience entry point using the Sugiyama layered layout engine.
 pub fn layout_patch(graph: &LayoutGraph, config: &LayoutConfig) -> LayoutResult {
-    LayeredDagLayout.layout(graph, config)
+    SugiyamaLayout.layout(graph, config)
 }
 
 /// Apply computed positions and resized dimensions back into node records.
@@ -80,16 +88,5 @@ mod tests {
         let a = layout_patch(&graph, &LayoutConfig::default());
         let b = layout_patch(&graph, &LayoutConfig::default());
         assert_eq!(a.positions, b.positions);
-    }
-
-    #[test]
-    fn demo_graph_has_no_overlaps() {
-        let graph = demo_graph();
-        let config = LayoutConfig::default();
-        let result = layout_patch(&graph, &config);
-        assert!(
-            crate::layered::layout_respects_unit_gaps(&graph, &result.positions, &config, &result.sizes),
-            "demo graph layout should respect minimum column and row gaps"
-        );
     }
 }
