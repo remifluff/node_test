@@ -1,6 +1,6 @@
 //! Keyboard-driven sorted layout pane.
 
-mod draw;
+pub mod draw;
 
 use eframe::egui::{Key, Rect, Ui};
 use patch_graph::{LayoutPreview, NodeId, PatchGraph};

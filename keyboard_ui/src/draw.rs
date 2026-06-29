@@ -1,12 +1,14 @@
 //! Sorted-layout rendering for the keyboard pane.
 
-use eframe::egui::{self, pos2, vec2, Color32, CornerRadius, Id, LayerId, Order, Pos2, Rect, Stroke, Ui, Vec2};
+use std::collections::HashMap;
+
+use eframe::egui::{self, pos2, vec2, Color32, CornerRadius, Id, Order, Pos2, Rect, Stroke, Ui, Vec2};
 use patch_graph::{LayoutPreview, Node, NodeId, PatchGraph};
 
 use mouse_ui::canvas::{scene_layer_id, scene_transform};
 use mouse_ui::style::{
     self, default_port_ts, label_font, layout_job, paint_port_square, port_position_t,
-    PortHighlight, GRID_STEP, INK, LABEL_INSET_X, LINE_W, PAPER, PAPER_DIM,
+    PortHighlight, GRID_STEP, LABEL_INSET_X, LINE_W, PAPER, PAPER_DIM,
 };
 
 const PATCH_BORDER_PAD: f32 = 100.0;
@@ -70,16 +72,6 @@ fn node_world_rect_for(graph: &PatchGraph, node_id: NodeId, preview: &LayoutPrev
 }
 
 fn socket_position(node: &Node, rect: Rect, index: usize, is_outlet: bool) -> Pos2 {
-    let positions = if is_outlet {
-        &node.outlet_positions
-    } else {
-        &node.inlet_positions
-    };
-    if let Some(pos) = positions.get(index) {
-        if pos.x.is_finite() && pos.y.is_finite() {
-            return *pos;
-        }
-    }
     let ts = if is_outlet {
         &node.outlet_t
     } else {
@@ -119,6 +111,43 @@ fn draw_bezier_wire(painter: &egui::Painter, points: [Pos2; 4], selected: bool) 
     }));
 }
 
+pub fn node_order_for_paint(graph: &PatchGraph, preview: &LayoutPreview) -> Vec<NodeId> {
+    let mut row_slots: HashMap<usize, (usize, usize)> = HashMap::new();
+    for (row, nodes) in preview.rows.iter().enumerate() {
+        for (slot, &idx) in nodes.iter().enumerate() {
+            row_slots.insert(idx, (row, slot));
+        }
+    }
+
+    let mut node_order: Vec<NodeId> = graph.node_indices().collect();
+    node_order.sort_by(|a, b| {
+        let a_is_comment = graph[*a].object.is_comment();
+        let b_is_comment = graph[*b].object.is_comment();
+        if a_is_comment != b_is_comment {
+            return a_is_comment.cmp(&b_is_comment);
+        }
+
+        let a_key = row_slots
+            .get(&a.index())
+            .copied()
+            .or_else(|| preview.nav.get(&a.index()).map(|cell| (cell.row as usize, cell.slot as usize)));
+        let b_key = row_slots
+            .get(&b.index())
+            .copied()
+            .or_else(|| preview.nav.get(&b.index()).map(|cell| (cell.row as usize, cell.slot as usize)));
+        match (a_key, b_key) {
+            (Some(a_cell), Some(b_cell)) => a_cell
+                .0
+                .cmp(&b_cell.0)
+                .then_with(|| a_cell.1.cmp(&b_cell.1)),
+            (Some(_), None) => std::cmp::Ordering::Less,
+            (None, Some(_)) => std::cmp::Ordering::Greater,
+            (None, None) => a.index().cmp(&b.index()),
+        }
+    });
+    node_order
+}
+
 pub fn paint_scene(
     scene_ui: &mut Ui,
     graph: &PatchGraph,
@@ -133,10 +162,8 @@ pub fn paint_scene(
     let world_clip = scene_ui.clip_rect();
     let mut painter = ctx.layer_painter(scene_layer);
     painter.set_clip_rect(world_clip);
-    draw_grid(&painter, world_clip);
 
-    let mut node_order: Vec<NodeId> = graph.node_indices().collect();
-    node_order.sort_by_key(|id| graph[*id].object.is_comment());
+    let node_order = node_order_for_paint(graph, preview);
 
     for node_id in node_order {
         paint_node(
@@ -267,5 +294,36 @@ fn draw_wires(graph: &PatchGraph, painter: &egui::Painter, preview: &LayoutPrevi
         let to_pos = socket_position(&graph[to], to_rect, edge.to_port, false);
         let points = wire_bezier_points(from_pos, true, to_pos, true);
         draw_bezier_wire(painter, points, edge.selected);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn socket_position_uses_preview_rect_and_port_t() {
+        let node = Node {
+            object: patch_graph::PdObject::MulTilde,
+            label: "*~".into(),
+            pos: Pos2::ZERO,
+            size: vec2(80.0, 40.0),
+            box_id: None,
+            screen_rect: Rect::NOTHING,
+            inlet_t: vec![0.25],
+            outlet_t: vec![0.75],
+            inlet_positions: vec![pos2(999.0, 999.0)],
+            outlet_positions: vec![pos2(-999.0, -999.0)],
+            selected: false,
+        };
+        let rect = Rect::from_min_size(pos2(120.0, 60.0), vec2(80.0, 40.0));
+
+        let inlet = socket_position(&node, rect, 0, false);
+        let outlet = socket_position(&node, rect, 0, true);
+
+        assert_eq!(inlet, port_position_t(rect, 0.25, false, WORLD_ZOOM));
+        assert_eq!(outlet, port_position_t(rect, 0.75, true, WORLD_ZOOM));
+        assert!(!inlet.is_close(pos2(999.0, 999.0)));
+        assert!(!outlet.is_close(pos2(-999.0, -999.0)));
     }
 }
