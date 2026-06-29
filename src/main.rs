@@ -3,6 +3,8 @@
 
 mod graph;
 mod layout_adapter;
+mod node_autocomplete;
+mod operator_library;
 mod patch_export;
 mod style;
 

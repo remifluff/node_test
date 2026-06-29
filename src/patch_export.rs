@@ -255,6 +255,7 @@ mod tests {
         let mut graph = PatchGraph::default();
         let in_id = graph.add_node(Node {
             object: PdObject::In,
+            label: "[in]".to_owned(),
             pos: pos2(100.0, 40.0),
             size: eframe::egui::vec2(30.0, 22.0),
             box_id: Some("obj-1".into()),
@@ -267,6 +268,7 @@ mod tests {
         });
         let out_id = graph.add_node(Node {
             object: PdObject::Out,
+            label: "[out]".to_owned(),
             pos: pos2(100.0, 110.0),
             size: eframe::egui::vec2(30.0, 22.0),
             box_id: Some("obj-2".into()),
