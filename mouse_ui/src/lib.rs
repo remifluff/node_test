@@ -4,6 +4,7 @@
 
 pub mod align;
 pub mod canvas;
+pub mod patch_canvas;
 pub mod codebox_editor;
 pub mod column_layout;
 pub mod crash_log;
@@ -18,6 +19,8 @@ pub mod style;
 pub mod theme;
 
 pub use canvas::{BodyDragProbe, Drag, MouseDebugInfo, NodeEditor, PatchState};
+pub use patch_canvas::{PatchCanvas, PatchCanvasResponse};
+pub use operator_library::OperatorLibrary;
 pub use codebox_editor::{CodeboxResponse, CodeboxWidget, lop_expr_layout_job};
 pub use flags::{CableStyle, Flags};
 pub use node_widget::{

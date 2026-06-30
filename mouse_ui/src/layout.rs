@@ -1,4 +1,4 @@
-use eframe::egui::{pos2, FontFamily, FontId, Pos2, Rect, Vec2};
+use egui::{pos2, FontFamily, FontId, Pos2, Rect, Vec2};
 
 use patch_graph::PatchGraph;
 

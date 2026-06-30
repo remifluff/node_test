@@ -1,4 +1,4 @@
-use eframe::egui::{self, Context, Id, Pos2, Rect, Sense, Ui, Vec2};
+use egui::{self, Context, Id, Pos2, Rect, Sense, Ui, Vec2};
 
 use patch_graph::NodeId;
 

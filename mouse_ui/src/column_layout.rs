@@ -1,4 +1,4 @@
-use eframe::egui::Rect;
+use egui::Rect;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum GhostRole {

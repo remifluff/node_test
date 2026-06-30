@@ -1,6 +1,6 @@
 use std::sync::OnceLock;
 
-use eframe::egui::Color32;
+use egui::Color32;
 
 use crate::layout::LINE_W;
 

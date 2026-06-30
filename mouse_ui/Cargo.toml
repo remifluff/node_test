@@ -9,8 +9,12 @@ repository = "https://github.com/remifluff/node_test"
 [dependencies]
 patch_graph = { path = "../patch_graph" }
 egui = "0.34.1"
-eframe = "0.34.1"
 petgraph = "0.8"
 log = "0.4.27"
 
 [dev-dependencies]
+eframe = "0.34.1"
+
+[[example]]
+name = "embed"
+path = "examples/embed.rs"

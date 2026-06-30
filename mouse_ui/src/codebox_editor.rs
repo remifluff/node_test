@@ -1,4 +1,4 @@
-use eframe::egui::{text::LayoutJob, FontId, Pos2, Rect, Vec2};
+use egui::{text::LayoutJob, FontId, Pos2, Rect, Vec2};
 
 use patch_graph::NodeId;
 
@@ -44,6 +44,6 @@ impl CodeboxResponse {
     }
 }
 
-pub fn lop_expr_layout_job(_source: &str, _font: FontId, _text_color: impl Into<eframe::egui::Color32>) -> LayoutJob {
+pub fn lop_expr_layout_job(_source: &str, _font: FontId, _text_color: impl Into<egui::Color32>) -> LayoutJob {
     LayoutJob::default()
 }

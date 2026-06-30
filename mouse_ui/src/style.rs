@@ -1,5 +1,5 @@
-use eframe::egui::text::{LayoutJob, TextFormat};
-use eframe::egui::{
+use egui::text::{LayoutJob, TextFormat};
+use egui::{
     self, Color32, Context, CornerRadius, FontFamily, FontId, Margin, Stroke, Style, TextStyle,
     Visuals,
 };

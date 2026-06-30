@@ -1,4 +1,4 @@
-use eframe::egui::{self, pos2, Id, Key, RichText, Sense, Ui, Vec2};
+use egui::{self, pos2, Id, Key, RichText, Sense, Ui, Vec2};
 use patch_graph::PdObject;
 
 use crate::node_autocomplete::{show_operator_autocomplete, show_sized_text_edit};

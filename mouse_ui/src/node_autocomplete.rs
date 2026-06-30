@@ -1,9 +1,9 @@
 //! Operator autocomplete popup while editing node labels.
 
-use eframe::egui::{
+use egui::{
     self, Align, Id, Key, Popup, RichText, ScrollArea, Style, TextEdit, Ui,
 };
-use eframe::egui::text::CCursorRange;
+use egui::text::CCursorRange;
 
 use crate::operator_library::{OperatorEntry, OperatorLibrary};
 use crate::style::{INK, PAPER, PAPER_DIM};
@@ -19,7 +19,7 @@ pub struct AutocompleteAction {
 pub fn show_operator_autocomplete(
     ui: &mut Ui,
     edit_id: Id,
-    anchor: eframe::egui::Rect,
+    anchor: egui::Rect,
     buffer: &mut String,
     cursor_range: Option<CCursorRange>,
     library: &OperatorLibrary,
@@ -177,9 +177,9 @@ fn apply_completion(buffer: &mut String, token_start: usize, token_end: usize, n
 /// Run a sized [`TextEdit`] and return its output.
 pub fn show_sized_text_edit(
     ui: &mut Ui,
-    size: eframe::egui::Vec2,
+    size: egui::Vec2,
     edit: TextEdit<'_>,
-) -> eframe::egui::text_edit::TextEditOutput {
+) -> egui::text_edit::TextEditOutput {
     ui.allocate_ui_with_layout(size, egui::Layout::left_to_right(Align::Center), |ui| {
         ui.set_min_size(size);
         edit.show(ui)
