@@ -7,9 +7,8 @@ Pd-style patch editor built with [egui](https://github.com/emilk/egui) / [eframe
 | Crate | Role |
 |-------|------|
 | `patch_graph` | Node graph domain model, `.lop` export, and automatic layout (merged from the old `patch_layout` crate) |
-| `mouse_ui` | Shared canvas, styling, and mouse-driven node widgets |
-| `keyboard_ui` | Sorted-layout pane with arrow-key navigation |
-| `node_test` (`pd_editor` binary) | App shell composing the two UI panes |
+| `mouse_ui` | Shared canvas, styling, mouse-driven node widgets, and patch sorting |
+| `node_test` (`pd_editor` binary) | App shell |
 
 ## Run
 

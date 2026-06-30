@@ -9,12 +9,11 @@ use petgraph::graph::{EdgeIndex, NodeIndex};
 use petgraph::stable_graph::StableGraph;
 use petgraph::visit::{EdgeRef, IntoNeighborsDirected};
 use patch_graph::{
-    export_patch, layout_preview_cached, LayoutConfig, LayoutPreview, EdgeData, EdgeId,
+    export_patch, EdgeData, EdgeId,
     Node, NodeId, PatchGraph, PdObject,
 };
 use patch_graph::parse::{commit_node_label, estimate_node_size, estimate_text_box_size, object_from_label, parse_delay_hex, random_unused_delay_hex, parse_pd_object_text};
 use patch_graph::{cycle_vertical_bounds, find_cycle_nodes, find_path_nodes};
-use keyboard_ui::{KeyboardAction, KeyboardUi};
 use mouse_ui::canvas::{scene_layer_id, scene_transform, show_patch_scene, CanvasView};
 use mouse_ui::object_ui::{self, NodeAreaBody};
 
@@ -27,6 +26,7 @@ use mouse_ui::style::{
 };
 use mouse_ui::node_autocomplete::{show_operator_autocomplete, show_sized_text_edit};
 use mouse_ui::operator_library::OperatorLibrary;
+use mouse_ui::sort_patch;
 
 const MARQUEE_MIN_AREA: f32 = 16.0;
 const PATCH_BORDER_PAD: f32 = 100.0;
@@ -121,8 +121,6 @@ struct NodePointerPress {
 pub struct PdPatchEditor {
     graph: PatchGraph,
     mouse_view: CanvasView,
-    keyboard: KeyboardUi,
-    split_screen: bool,
     pending_wires: Vec<PendingWire>,
     wire_drag_active: bool,
     rewire_state: Option<WireRewireState>,
@@ -132,7 +130,6 @@ pub struct PdPatchEditor {
     /// Node size when editing started; restored on cancel.
     edit_start_size: Option<Vec2>,
     delay_pairs: HashMap<NodeId, NodeId>,
-    layout_preview_cache: Option<(u64, LayoutPreview)>,
     debug_auto_combine: bool,
     debug_auto_send_receive: bool,
     debug_auto_delay: bool,
@@ -191,7 +188,6 @@ impl PdPatchEditor {
         self.graph = snapshot.graph;
         self.delay_pairs = snapshot.delay_pairs;
         self.next_box_id = snapshot.next_box_id;
-        self.invalidate_layout_preview();
         self.editing_node = None;
         self.edit_buffer.clear();
         self.edit_start_size = None;
@@ -257,16 +253,12 @@ impl PdPatchEditor {
         self.editing_node.is_none()
     }
 
-    pub fn organize_layout(&mut self) {
-        patch_graph::layout_adapter::organize_patch(
-            &mut self.graph,
-            &patch_graph::LayoutConfig::default(),
-        );
-        self.invalidate_layout_preview();
-    }
-
-    fn invalidate_layout_preview(&mut self) {
-        self.layout_preview_cache = None;
+    fn sort_layout(&mut self) {
+        if self.graph.node_count() <= 1 {
+            return;
+        }
+        self.record_undo();
+        sort_patch(&mut self.graph, true);
     }
 
     fn spawn_object_at(&mut self, world_pos: Pos2) {
@@ -302,7 +294,6 @@ impl PdPatchEditor {
             outlet_positions: vec![Pos2::ZERO; outlets],
             selected: false,
         });
-        self.invalidate_layout_preview();
         id
     }
 
@@ -385,7 +376,6 @@ impl PdPatchEditor {
                     };
                     let receive = self.spawn_receive_near(to_node, to_in, hex);
                     self.force_connect_ports(receive, 0, to_node, to_in);
-                    self.invalidate_layout_preview();
                     return;
                 }
                 self.connect_ports_through_send_receive(
@@ -409,13 +399,11 @@ impl PdPatchEditor {
 
         if find_path_nodes(&self.graph, to_node, from_node).is_none() {
             self.graph.add_edge(from_node, to_node, edge_data);
-            self.invalidate_layout_preview();
             return;
         }
 
         if self.debug_auto_delay {
             self.connect_ports_through_delays(from_node, from_out, to_node, to_in);
-            self.invalidate_layout_preview();
         }
     }
 
@@ -459,7 +447,6 @@ impl PdPatchEditor {
         self.force_connect_ports(from_node, from_out, send, 0);
         self.force_connect_ports(receive_existing, 0, existing_to, existing_to_in);
         self.force_connect_ports(receive_new, 0, to_node, to_in);
-        self.invalidate_layout_preview();
     }
 
     fn spawn_send_near(&mut self, from_node: NodeId, from_out: usize, hex: u8) -> NodeId {
@@ -740,7 +727,6 @@ impl PdPatchEditor {
             if let Some(node) = self.graph.node_weight_mut(node_id) {
                 commit_node_label(node, &self.edit_buffer);
                 self.sync_node_ports(node_id);
-                self.invalidate_layout_preview();
             }
         } else if let Some(size) = start_size {
             if let Some(node) = self.graph.node_weight_mut(node_id) {
@@ -790,7 +776,6 @@ impl PdPatchEditor {
         }
 
         let _ = self.graph.remove_node(id);
-        self.invalidate_layout_preview();
     }
 
     fn clear_node_selection(&mut self) {
@@ -842,7 +827,6 @@ impl PdPatchEditor {
             self.graph.remove_edge(edge_id);
         }
         if had_edges {
-            self.invalidate_layout_preview();
         }
         self.cancel_patching();
     }
@@ -873,34 +857,6 @@ impl PdPatchEditor {
                 }
             }
         }
-    }
-
-    fn socket_position_for(
-        &self,
-        node_id: NodeId,
-        port: usize,
-        is_outlet: bool,
-        preview: Option<&patch_graph::layout_adapter::LayoutPreview>,
-    ) -> Pos2 {
-        let node = &self.graph[node_id];
-        let rect = self.node_world_rect_for(node_id, preview);
-        let t = if is_outlet {
-            let count = node.object.outlets();
-            if node.outlet_t.len() == count {
-                node.outlet_t.get(port).copied()
-            } else {
-                default_port_ts(count).get(port).copied()
-            }
-        } else {
-            let count = node.object.inlets();
-            if node.inlet_t.len() == count {
-                node.inlet_t.get(port).copied()
-            } else {
-                default_port_ts(count).get(port).copied()
-            }
-        }
-        .unwrap_or(0.0);
-        port_position_t(rect, t, is_outlet, WORLD_ZOOM)
     }
 
     fn edge_bezier_points(&self, edge_id: EdgeId) -> Option<[Pos2; 4]> {
@@ -1162,6 +1118,16 @@ impl PdPatchEditor {
         incoming.len() == 1 && outgoing.len() == 1
     }
 
+    fn node_shift_drag_insert_eligible(&self, node_id: NodeId) -> bool {
+        if !self.graph.contains_node(node_id) {
+            return false;
+        }
+        let node = &self.graph[node_id];
+        !node.object.is_comment()
+            && node.object.inlets() > 0
+            && node.object.outlets() > 0
+    }
+
     /// Max-style shift-drag: disconnect selected node(s) and bridge upstream to downstream.
     fn shift_drag_bridge_nodes(&mut self, node_ids: &[NodeId]) {
         if node_ids.is_empty() {
@@ -1199,7 +1165,6 @@ impl PdPatchEditor {
         for (from, from_port, to, to_port) in bridges {
             self.force_connect_ports(from, from_port, to, to_port);
         }
-        self.invalidate_layout_preview();
     }
 
     /// Max-style shift-drag: insert `node_id` into `edge_id` (from → node → to).
@@ -1232,7 +1197,6 @@ impl PdPatchEditor {
         self.graph.remove_edge(edge_id);
         self.force_connect_ports(from, edge.from_port, node_id, 0);
         self.force_connect_ports(node_id, 0, to, edge.to_port);
-        self.invalidate_layout_preview();
         true
     }
 
@@ -1542,8 +1506,6 @@ impl Default for PdPatchEditor {
         Self {
             graph: PatchGraph::default(),
             mouse_view: CanvasView::new(),
-            keyboard: KeyboardUi::default(),
-            split_screen: true,
             pending_wires: Vec::new(),
             wire_drag_active: false,
             rewire_state: None,
@@ -1552,7 +1514,6 @@ impl Default for PdPatchEditor {
             edit_buffer: String::new(),
             edit_start_size: None,
             delay_pairs: HashMap::new(),
-            layout_preview_cache: None,
             debug_auto_combine: false,
             debug_auto_send_receive: false,
             debug_auto_delay: true,
@@ -1583,7 +1544,9 @@ impl eframe::App for PdPatchEditor {
                         ui.checkbox(&mut self.debug_auto_send_receive, "Auto send/receive");
                         ui.checkbox(&mut self.debug_auto_delay, "Auto delay");
                     });
-                    ui.checkbox(&mut self.split_screen, "Split view");
+                    if ui.button("Sort").clicked() {
+                        self.sort_layout();
+                    }
                     if ui.button("Reload operators").clicked() {
                         self.operator_library = OperatorLibrary::load_preferred();
                     }
@@ -1608,75 +1571,7 @@ impl eframe::App for PdPatchEditor {
                 ..Default::default()
             })
             .show_inside(ui, |ui| {
-                if self.split_screen {
-                    let mut preview = layout_preview_cached(
-                        &self.graph,
-                        &mut self.layout_preview_cache,
-                    )
-                    .clone();
-
-                    egui::Panel::right("keyboard_ui")
-                        .resizable(true)
-                        .min_size(200.0)
-                        .default_size(ui.available_width() * 0.5)
-                        .frame(egui::Frame {
-                            fill: INK,
-                            inner_margin: egui::Margin::ZERO,
-                            ..Default::default()
-                        })
-                        .show_inside(ui, |ui| {
-                            ui.horizontal(|ui| {
-                                ui.label(RichText::new("Sorted layout").strong());
-                                    ui.label(
-                                        RichText::new("↑↓ wires · ←→ row · Shift+←→ reorder · Enter splice")
-                                            .small()
-                                            .color(PAPER_DIM),
-                                    );
-                            });
-                            ui.separator();
-                            let default_scene = self.default_scene_view_rect();
-                            let editing = self.editing_node;
-                            self.keyboard.show(ui, &self.graph, &mut preview, editing, default_scene);
-
-                            if let KeyboardAction::SpliceNewNode { focus } = self.keyboard.action {
-                                self.record_undo();
-                                self.clear_all_selection();
-                                if let Some(edge_id) = self.graph.edge_indices().find(|&eid| {
-                                    self.graph.edge_endpoints(eid)
-                                        .is_some_and(|(from, _to)| from == focus)
-                                }) {
-                                    let focus_pos = self.graph[focus].pos;
-                                    let new_pos = pos2(focus_pos.x, focus_pos.y + 75.0);
-                                    let new_id = self.add_object(
-                                        PdObject::Message { text: String::new() },
-                                        new_pos,
-                                    );
-                                    self.graph[new_id].selected = true;
-                                    self.insert_node_on_edge(new_id, edge_id);
-                                    self.start_editing(new_id);
-                                    self.keyboard.focus = Some(new_id);
-                                    self.keyboard.auto_focus = true;
-                                }
-                                self.keyboard.action = KeyboardAction::None;
-                            }
-                        });
-
-                    egui::CentralPanel::default()
-                        .frame(egui::Frame {
-                            fill: INK,
-                            inner_margin: egui::Margin::ZERO,
-                            ..Default::default()
-                        })
-                        .show_inside(ui, |ui| {
-                            ui.horizontal(|ui| {
-                                ui.label(RichText::new("Raw patch").strong());
-                            });
-                            ui.separator();
-                            self.mouse_ui(ui, true);
-                        });
-                } else {
-                    self.mouse_ui(ui, true);
-                }
+                self.mouse_ui(ui, true);
             });
 
     }
@@ -1751,7 +1646,7 @@ impl PdPatchEditor {
             }
             self.show_all_ports(scene_ui, canvas_rect, transform);
             self.draw_patch_border(&painter);
-            self.draw_wires_on_painter(&painter, None);
+            self.draw_wires_on_painter(&painter);
             self.draw_shift_drag_splice_preview(&painter);
             self.show_wire_handles(scene_ui, canvas_rect, transform);
             self.draw_pending_wire(&painter, &ctx, transform);
@@ -1771,159 +1666,6 @@ impl PdPatchEditor {
             self.handle_patch_cable_input(ui, canvas_rect, transform);
             self.finish_marquee(ui, transform);
         }
-    }
-
-    fn world_pos_for_node(
-        &self,
-        node_id: NodeId,
-        preview: Option<&patch_graph::layout_adapter::LayoutPreview>,
-    ) -> Pos2 {
-        if let Some(preview) = preview {
-            if let Some(pos) = preview.positions.get(&node_id.index()) {
-                return *pos;
-            }
-        }
-        self.graph[node_id].pos
-    }
-
-    fn node_size_for_preview(
-        &self,
-        node_id: NodeId,
-        preview: Option<&patch_graph::layout_adapter::LayoutPreview>,
-    ) -> Vec2 {
-        if let Some(preview) = preview {
-            if let Some(size) = preview.sizes.get(&node_id.index()) {
-                return *size;
-            }
-        }
-        self.graph[node_id].size
-    }
-
-    fn node_world_rect_for(
-        &self,
-        node_id: NodeId,
-        preview: Option<&patch_graph::layout_adapter::LayoutPreview>,
-    ) -> Rect {
-        Rect::from_min_size(
-            self.world_pos_for_node(node_id, preview),
-            self.node_size_for_preview(node_id, preview),
-        )
-    }
-
-    fn paint_node_world(
-        &self,
-        painter: &egui::Painter,
-        world_clip: Rect,
-        node_id: NodeId,
-        preview: &patch_graph::layout_adapter::LayoutPreview,
-        zoom: f32,
-        keyboard_focus: bool,
-    ) {
-        let node = &self.graph[node_id];
-        let rect = self.node_world_rect_for(node_id, Some(preview));
-        if !node_visible_in_scene(world_clip, rect) {
-            return;
-        }
-        let is_comment = node.object.is_comment();
-        let label = &node.label;
-
-        if is_comment {
-            let font = label_font(zoom);
-            let job = layout_job(label, font, false);
-            let galley = painter.layout_job(job);
-            painter.galley(
-                pos2(rect.min.x, rect.center().y - galley.size().y * 0.5),
-                galley,
-                PAPER_DIM,
-            );
-            return;
-        }
-
-        let frame = style::node_frame(keyboard_focus, false);
-        painter.add(frame.paint(rect));
-
-        let font = label_font(zoom);
-        let job = layout_job(&label, font, false);
-        let galley = painter.layout_job(job);
-        painter.galley(
-            pos2(
-                rect.min.x + LABEL_INSET_X * zoom,
-                rect.center().y - galley.size().y * 0.5,
-            ),
-            galley,
-            PAPER,
-        );
-    }
-
-    fn paint_ports_world(
-        &self,
-        painter: &egui::Painter,
-        world_clip: Rect,
-        preview: &patch_graph::layout_adapter::LayoutPreview,
-        zoom: f32,
-    ) {
-        for node_id in self.graph.node_indices() {
-            let node = &self.graph[node_id];
-            if node.object.is_comment() {
-                continue;
-            }
-
-            let rect = self.node_world_rect_for(node_id, Some(preview));
-            if !node_visible_in_scene(world_clip, rect) {
-                continue;
-            }
-            let inlets = node.object.inlets();
-            let outlets = node.object.outlets();
-            if inlets == 0 && outlets == 0 {
-                continue;
-            }
-
-            let inlet_ts = default_port_ts(inlets);
-            let outlet_ts = default_port_ts(outlets);
-
-            for i in 0..inlets {
-                let center = port_position_t(rect, inlet_ts[i], false, WORLD_ZOOM);
-                paint_port_square(&painter, center, false, PortHighlight::None, zoom);
-            }
-            for i in 0..outlets {
-                let center = port_position_t(rect, outlet_ts[i], true, WORLD_ZOOM);
-                paint_port_square(&painter, center, false, PortHighlight::None, zoom);
-            }
-        }
-    }
-
-    fn draw_patch_border_world(
-        &self,
-        painter: &egui::Painter,
-        world_clip: Rect,
-        preview: &patch_graph::layout_adapter::LayoutPreview,
-    ) {
-        let mut bounds = Rect::NOTHING;
-        let mut any = false;
-
-        for node_id in self.graph.node_indices() {
-            let rect = self.node_world_rect_for(node_id, Some(preview));
-            if !rect.is_positive() {
-                continue;
-            }
-            bounds = if any { bounds.union(rect) } else { rect };
-            any = true;
-        }
-
-        let Some(bounds) = any.then_some(bounds) else {
-            return;
-        };
-
-        let border = bounds.expand(PATCH_BORDER_PAD);
-        if !world_clip.intersects(border) {
-            return;
-        }
-        painter.rect_stroke(
-            border,
-            CornerRadius::ZERO,
-            Stroke::new(LINE_W, PAPER_DIM),
-            egui::StrokeKind::Outside,
-        );
     }
 
     fn handle_canvas_editing(
@@ -2041,7 +1783,6 @@ impl PdPatchEditor {
         for edge in rewire.edges {
             self.force_connect_ports(edge.from, edge.from_port, edge.to, edge.to_port);
         }
-        self.invalidate_layout_preview();
     }
 
     fn start_group_rewire_from_handle(&mut self, group: &WireHandleGroup) {
@@ -2088,7 +1829,6 @@ impl PdPatchEditor {
             dragged_end: group.end,
         });
         self.pending_wires = pending;
-        self.invalidate_layout_preview();
         self.wire_drag_active = true;
     }
 
@@ -2320,7 +2060,8 @@ impl PdPatchEditor {
             Order::Middle
         };
 
-        let movable = !is_comment && !is_editing && !is_alt_original && !is_alt_copy;
+        let shift = ui.input(|i| i.modifiers.shift);
+        let movable = !is_comment && (!is_editing || shift) && !is_alt_original && !is_alt_copy;
         let resizable = !is_comment && !is_editing && !is_alt_original && !is_alt_copy;
 
         let object = self.graph[node_id].object.clone();
@@ -2383,17 +2124,16 @@ impl PdPatchEditor {
                 paint_node_hover_highlight(patch_painter, world_rect, WORLD_ZOOM);
             }
 
-            if !is_editing {
-                let alt = ui.input(|i| i.modifiers.alt);
-                let shift = ui.input(|i| i.modifiers.shift);
-                let pointer = ui.input(|i| i.pointer.interact_pos());
-                let hit_port = pointer.is_some_and(|p| {
-                    self.find_inlet_at(p, transform).is_some() || self.find_outlet_at(p, transform).is_some()
-                });
-                let hit_wire_handle =
-                    pointer.is_some_and(|p| self.pointer_on_wire_handle(p, transform));
-                let hit_body = area_result.body_response.contains_pointer();
+            let alt = ui.input(|i| i.modifiers.alt);
+            let pointer = ui.input(|i| i.pointer.interact_pos());
+            let hit_port = pointer.is_some_and(|p| {
+                self.find_inlet_at(p, transform).is_some() || self.find_outlet_at(p, transform).is_some()
+            });
+            let hit_wire_handle =
+                pointer.is_some_and(|p| self.pointer_on_wire_handle(p, transform));
+            let hit_body = area_result.body_response.contains_pointer();
 
+            if !is_editing {
                 if ui.input(|i| i.pointer.primary_pressed())
                     && hit_body
                     && !hit_port
@@ -2435,14 +2175,30 @@ impl PdPatchEditor {
 
                 if area_result.body_response.drag_started()
                     && !alt
-                    && !is_comment
+                    && !shift
+                    && !was_selected
                     && self.pending_wires.is_empty()
                 {
+                    let skip = ui.input(|i| i.pointer.interact_pos())
+                        .is_some_and(|pointer| self.pointer_on_wire_handle(pointer, transform));
+                    if !skip {
+                        self.stop_editing(true);
+                        self.clear_all_selection();
+                        node_selected = true;
+                    }
+                }
+            }
+
+            if !is_comment && self.pending_wires.is_empty() {
+                if area_result.body_response.drag_started() && !alt {
+                    if is_editing {
+                        self.stop_editing(true);
+                    }
                     self.record_undo();
                     if shift {
                         let nodes = self.nodes_to_duplicate(node_id);
                         for &id in &nodes {
-                            if self.node_shift_drag_eligible(id) {
+                            if self.node_shift_drag_insert_eligible(id) {
                                 self.shift_drag_eligible.insert(id);
                             }
                         }
@@ -2453,8 +2209,6 @@ impl PdPatchEditor {
                 if area_result.body_response.drag_stopped()
                     && shift
                     && !alt
-                    && !is_comment
-                    && self.pending_wires.is_empty()
                 {
                     if let Some(pointer) = pointer {
                         self.try_shift_drag_insert_on_wire(node_id, pointer, world_rect, transform);
@@ -2488,17 +2242,12 @@ impl PdPatchEditor {
                     }
                 }
 
-                if area_result.resize_delta.length_sq() > 0.0 && !is_comment {
+                if area_result.resize_delta.length_sq() > 0.0 && !is_editing {
                     node_size += area_result.resize_delta / zoom;
                     node_size = node_size.max(NODE_MIN_SIZE);
                 }
 
-                if area_result.body_response.dragged()
-                    && shift
-                    && !alt
-                    && !is_comment
-                    && self.pending_wires.is_empty()
-                {
+                if area_result.body_response.dragged() && shift && !alt {
                     if let Some(pointer) = pointer {
                         self.update_shift_drag_splice_preview(
                             node_id,
@@ -2506,21 +2255,6 @@ impl PdPatchEditor {
                             world_rect,
                             transform,
                         );
-                    }
-                }
-
-                if area_result.body_response.drag_started()
-                    && !alt
-                    && !ui.input(|i| i.modifiers.shift)
-                    && !was_selected
-                    && self.pending_wires.is_empty()
-                {
-                    let skip = ui.input(|i| i.pointer.interact_pos())
-                        .is_some_and(|pointer| self.pointer_on_wire_handle(pointer, transform));
-                    if !skip {
-                        self.stop_editing(true);
-                        self.clear_all_selection();
-                        node_selected = true;
                     }
                 }
             }
@@ -2702,11 +2436,7 @@ impl PdPatchEditor {
         }
     }
 
-    fn draw_wires_on_painter(
-        &self,
-        painter: &egui::Painter,
-        preview: Option<&patch_graph::layout_adapter::LayoutPreview>,
-    ) {
+    fn draw_wires_on_painter(&self, painter: &egui::Painter) {
         let omit_edge = self.shift_drag_splice_preview.map(|p| p.edge_id);
         for edge_id in self.graph.edge_indices() {
             if omit_edge == Some(edge_id) {
@@ -2715,12 +2445,7 @@ impl PdPatchEditor {
             if self.graph[edge_id].selected {
                 continue;
             }
-            let points = if preview.is_some() {
-                self.edge_bezier_points_for_preview(edge_id, preview)
-            } else {
-                self.edge_bezier_points(edge_id)
-            };
-            let Some(points) = points else {
+            let Some(points) = self.edge_bezier_points(edge_id) else {
                 continue;
             };
             draw_bezier_wire(painter, points, false);
@@ -2733,64 +2458,11 @@ impl PdPatchEditor {
             if !self.graph[edge_id].selected {
                 continue;
             }
-            let points = if preview.is_some() {
-                self.edge_bezier_points_for_preview(edge_id, preview)
-            } else {
-                self.edge_bezier_points(edge_id)
-            };
-            let Some(points) = points else {
+            let Some(points) = self.edge_bezier_points(edge_id) else {
                 continue;
             };
             draw_bezier_wire(painter, points, true);
         }
-    }
-
-    fn edge_bezier_points_for_preview(
-        &self,
-        edge_id: EdgeId,
-        preview: Option<&patch_graph::layout_adapter::LayoutPreview>,
-    ) -> Option<[Pos2; 4]> {
-        let (from_id, to_id) = self.graph.edge_endpoints(edge_id)?;
-        let edge = &self.graph[edge_id];
-        let from = self.socket_position_for_preview(from_id, edge.from_port, true, preview);
-        let to = self.socket_position_for_preview(to_id, edge.to_port, false, preview);
-        Some(wire_bezier_points(from, true, to, true))
-    }
-
-    fn socket_position_for_preview(
-        &self,
-        node_id: NodeId,
-        port: usize,
-        is_outlet: bool,
-        preview: Option<&patch_graph::layout_adapter::LayoutPreview>,
-    ) -> Pos2 {
-        let node = &self.graph[node_id];
-        let world = preview
-            .and_then(|p| p.positions.get(&node_id.index()))
-            .copied()
-            .unwrap_or(node.pos);
-        let size = preview
-            .and_then(|p| p.sizes.get(&node_id.index()))
-            .copied()
-            .unwrap_or(node.size);
-        let rect = Rect::from_min_size(world, size);
-        let t = if is_outlet {
-            let count = node.object.outlets();
-            if node.outlet_t.len() == count {
-                node.outlet_t.get(port).copied()
-            } else {
-                default_port_ts(count).get(port).copied()
-            }
-        } else {
-            let count = node.object.inlets();
-            if node.inlet_t.len() == count {
-                node.inlet_t.get(port).copied()
-            } else {
-                default_port_ts(count).get(port).copied()
-            }
-        }
-        .unwrap_or(0.0);
-        port_position_t(rect, t, is_outlet, WORLD_ZOOM)
     }
 
     fn draw_pending_wire(&self, painter: &egui::Painter, ctx: &Context, transform: TSTransform) {
@@ -3184,8 +2856,32 @@ mod shift_drag_tests {
         assert_eq!(edge_count(&editor), 1);
 
         // Eligibility from drag-start must persist until pointer release.
+        assert!(editor.node_shift_drag_insert_eligible(middle));
         editor.shift_drag_eligible.insert(middle);
         editor.try_shift_drag_insert_on_wire(middle, wire_mid, node_rect, transform);
+        assert_eq!(edge_count(&editor), 2);
+    }
+
+    #[test]
+    fn shift_drag_insert_works_for_disconnected_splicable_node() {
+        let mut editor = PdPatchEditor::default();
+        let a = editor.add_object(PdObject::In, pos2(0.0, 0.0));
+        let c = editor.add_object(PdObject::Out, pos2(200.0, 0.0));
+        let edge_id = editor.graph.add_edge(
+            a,
+            c,
+            EdgeData {
+                from_port: 0,
+                to_port: 0,
+                selected: false,
+            },
+        );
+        let insert = editor.add_object(PdObject::MulTilde, pos2(100.0, 50.0));
+        assert!(!editor.node_shift_drag_eligible(insert));
+        assert!(editor.node_shift_drag_insert_eligible(insert));
+
+        editor.shift_drag_eligible.insert(insert);
+        assert!(editor.insert_node_on_edge(insert, edge_id));
         assert_eq!(edge_count(&editor), 2);
     }
 

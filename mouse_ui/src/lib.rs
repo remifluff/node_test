@@ -23,4 +23,5 @@ pub use flags::{CableStyle, Flags};
 pub use node_widget::{
     drag_response_screen_delta, layout_job, show_drag_area, NodeResponse, NodeWidget,
 };
+pub use sort::sort_patch;
 pub use theme::EditorTheme;
